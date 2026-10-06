@@ -33,6 +33,7 @@ jobs:
 
       - name: Deploy PartyKit to Cloudflare
         env:
+          CI: "true"
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: npx partykit deploy --domain roundtable-api.dylandover.dev
