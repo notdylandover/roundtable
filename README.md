@@ -1,6 +1,6 @@
 # Roundtable
 
-A realtime PartyKit game-night app: sign in with Discord or as a guest, browse open tables, split into owner-named teams, or play **Buzz In** with a live, animated big-screen preview.
+A realtime game-night app (Next.js + a [PartyServer](https://github.com/cloudflare/partykit/tree/main/packages/partyserver) worker on Cloudflare Durable Objects): sign in with Discord or as a guest, browse open tables, split into owner-named teams, or play **Buzz In** with a live, animated big-screen preview.
 
 ## Development
 
@@ -10,13 +10,13 @@ Install dependencies:
 npm install
 ```
 
-Create `.env.local` from [.env.example](./.env.example). `AUTH_SECRET` is required (both Next.js and `partykit dev` read it); the Discord variables are optional — without them only guest sign-in is offered.
+Create `.env.local` from [.env.example](./.env.example). `AUTH_SECRET` is required (both Next.js and `wrangler dev` read it); the Discord variables are optional — without them only guest sign-in is offered.
 
 ```bash
 node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"
 ```
 
-Run the web app and PartyKit worker in separate terminals:
+Run the web app and party worker in separate terminals:
 
 ```bash
 npm run dev
@@ -26,14 +26,14 @@ npm run dev
 npm run dev:party
 ```
 
-Open [http://localhost](http://localhost). Next.js runs on port `80` and the local PartyKit worker runs on port `1999`.
+Open [http://localhost](http://localhost). Next.js runs on port `80` and the local party worker (`wrangler dev`) runs on port `1999`.
 
 ## Sign-in
 
 - **Discord** — OAuth2 with the `identify` scope only; just the username and avatar are kept. In the [Discord developer portal](https://discord.com/developers/applications) add the redirect `http://localhost/api/auth/discord/callback` (plus your production URL).
 - **Guest** — pick a display name (2–24 characters). Guests can rename themselves from the account menu.
 
-Sessions are HMAC-signed, `httpOnly` cookies. The browser exchanges the session for a 10-minute token (`/api/auth/party-token`) that the PartyKit worker verifies with the same `AUTH_SECRET`, so identities and admin rights can't be spoofed over the socket.
+Sessions are HMAC-signed, `httpOnly` cookies. The browser exchanges the session for a 10-minute token (`/api/auth/party-token`) that the party worker verifies with the same `AUTH_SECRET`, so identities and admin rights can't be spoofed over the socket.
 
 ## Routes
 
@@ -42,20 +42,23 @@ Sessions are HMAC-signed, `httpOnly` cookies. The browser exchanges the session 
 | `/` | Signed-out visitors | Landing page and sign-in. Signed-in users go straight to `/rooms`. |
 | `/rooms` | Signed-in users | All open rooms, room creation, and search. |
 | `/rooms/[slug]` | Signed-in users | The room: teams, Buzz In, and host/owner/admin controls. |
-| `/rooms/[slug]/preview` | Anyone with the link | Read-only Buzz In board with scores and animated clue, timer, and answer reveals. Answers stay hidden until the host reveals them, so it's safe to cast to a TV. |
+| `/rooms/[slug]/preview` | Anyone with the link | Read-only Buzz In stage: lobby, board with scores, animated clue/timer/answer reveals, Final Buzz In, and the winner podium. Answers stay hidden until the host reveals them, so it's safe to cast to a TV. |
 
 ## Buzz In
 
-- **Board:** the owner and host build the board in the **Clues** panel: 1–10 categories (5 by default) with 5 clues each. Rename a category inline, click any tile to write its clue and answer, or load prefilled content. Use a column's menu to load one prefilled category, or **Use prefilled board** to fill every column with random prefilled categories. Empty tiles are skipped during play.
+- **Lobby:** Buzz In rooms open in a lobby. Players mark themselves **Ready** while the owner and host build the board. Once every clue on the board is filled in, the owner or host gets a **Start game** button; if some players aren't ready they can still start after confirming.
+- **Board:** the owner and host build the board in the **Clues** panel: 1–10 categories (5 by default) with 5 clues each. Rename a category inline, click any tile to write its clue and answer, or load prefilled content. Use a column's menu to load one prefilled category, or **Use prefilled board** to fill every column with random prefilled categories.
 - **Prefilled categories** live in [lib/buzz-in/categories](./lib/buzz-in/categories). To add one, create a file there and list it in `PREFILLED_CATEGORIES` in [lib/buzz-in/index.ts](./lib/buzz-in/index.ts).
 - Players only receive a clue's text once it's picked, and the answer once it's revealed. The owner and host see everything, so neither can buzz; the host runs the game.
-- Players buzz with the button or the <kbd>Space</kbd> key.
+- Players buzz with the button or the <kbd>Space</kbd> key. Player screens use the same animated stage as the preview (board, clue reveals, timer, and live scores).
 - **Game rules** (owner/host): players can either **say** their answer out loud or **type** it after buzzing. Typed answers are shown only to the owner and host, marked as needing judging, correct, or incorrect. Clues can be picked by the **host**, or by **players**: the last player to answer correctly picks the next clue, and the host can always pick instead.
 - **Clue timer** (host tools): toggle it on or off, pick 5–180 seconds, and choose whether running out of time reveals the answer or just locks the buzzers. The clock pauses while a player answers and resumes (minimum 3 seconds) after a wrong answer.
+- **Final Buzz In** (owner/host, on by default): when the last clue is closed (or the host ends the board early), every player wagers up to their current score and types an answer before the timer runs out (60 seconds by default, 15–300). Use a random hard question from a prefilled category that isn't on the board, or write your own. Wagers and answers stay hidden from other players until the host judges them and reveals the results.
+- **Winner screen:** after the Final Buzz In (or the last clue, if it's off) everyone sees an animated podium. **Back to lobby** resets scores and clues for another game.
 
 ## Admins
 
-Admins are Discord accounts listed in `ADMIN_DISCORD_IDS` in [lib/auth/admins.ts](./lib/auth/admins.ts). Admin rights are checked on the PartyKit server. Admins can:
+Admins are Discord accounts listed in `ADMIN_DISCORD_IDS` in [lib/auth/admins.ts](./lib/auth/admins.ts). Admin rights are checked on the party worker. Admins can:
 
 - Delete any room from the room list or from inside the room.
 - Use owner controls in any room (rename, privacy, team size, game mode, choose the host, rename teams, move players).
@@ -63,7 +66,18 @@ Admins are Discord accounts listed in `ADMIN_DISCORD_IDS` in [lib/auth/admins.ts
 
 ## Deployment
 
-Deploy the PartyKit worker with `npx partykit deploy` and give it the same secret with `npx partykit env add AUTH_SECRET`. Set `NEXT_PUBLIC_PARTYKIT_HOST` to the worker's host when building the Next.js app (defaults to `localhost:1999`), and set `AUTH_SECRET` and the Discord variables in the web app's environment.
+The party worker ([party/index.ts](./party/index.ts), configured in [wrangler.json](./wrangler.json)) deploys to your Cloudflare account on the custom domain `roundtable-api.dylandover.dev`, using SQLite-backed Durable Objects (supported on the Workers Free plan).
+
+1. Create a Cloudflare API token from the **Edit Cloudflare Workers** template (it needs access to the account and the `dylandover.dev` zone for the custom domain).
+2. Give the worker the same secret as the web app (one-time; it persists across deploys):
+
+   ```bash
+   npx wrangler secret put AUTH_SECRET
+   ```
+
+3. Deploy with `npm run deploy:party` (with `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN` set, or after `npx wrangler login`). Pushes to `main`/`master` also deploy automatically via [.github/workflows/deploy-party.yaml](./.github/workflows/deploy-party.yaml), which needs the `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN` repository secrets.
+
+Production builds (`next build`) connect to the worker at `roundtable-api.dylandover.dev`; `next dev` connects to `localhost:1999`. Set `NEXT_PUBLIC_PARTYKIT_HOST` only to override that (for example, to test a production build against a local worker). Set `AUTH_SECRET` and the Discord variables in the web app's environment.
 
 ## Checks
 

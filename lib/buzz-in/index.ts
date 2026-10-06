@@ -97,3 +97,17 @@ export function pickRandomPrefilled(count: number, exclude: string[] = []) {
 export function isClueFilled(clue: Pick<BoardClueData, "prompt" | "answer">) {
     return clue.prompt.trim().length >= 2 && clue.answer.trim().length >= 1;
 }
+
+export function isBoardFull(board: BoardCategoryData[]) {
+    return board.length > 0 && board.every((category) => category.clues.every(isClueFilled));
+}
+
+/** A random Final Buzz In question: the hardest clue of a prefilled category that isn't on the board. */
+export function pickFinalQuestion(board: BoardCategoryData[]) {
+    const onBoard = board.map((category) => category.prefilledId).filter((id): id is string => Boolean(id));
+    const [category] = pickRandomPrefilled(1, onBoard);
+    const fallback = PREFILLED_CATEGORIES[Math.floor(Math.random() * PREFILLED_CATEGORIES.length)];
+    const source = category ?? fallback;
+    const clue = [...source.clues].sort((left, right) => right.value - left.value)[0];
+    return { category: source.name, prompt: clue.prompt, answer: clue.answer };
+}

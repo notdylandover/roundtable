@@ -1,0 +1,31 @@
+{
+    "$schema": "node_modules/wrangler/config-schema.json",
+    "name": "roundtable",
+    "main": "party/index.ts",
+    "compatibility_date": "2026-10-05",
+    "routes": [
+        {
+            "pattern": "roundtable-api.dylandover.dev",
+            "custom_domain": true
+        }
+    ],
+    "durable_objects": {
+        "bindings": [
+            {
+                "name": "Main",
+                "class_name": "Server"
+            }
+        ]
+    },
+    "migrations": [
+        {
+            "tag": "v1",
+            "new_sqlite_classes": [
+                "Server"
+            ]
+        }
+    ],
+    "dev": {
+        "port": 1999
+    }
+}

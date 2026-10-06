@@ -26,6 +26,46 @@ export const TIMER_MIN_SECONDS = 5;
 export const TIMER_MAX_SECONDS = 180;
 export const TIMER_PRESETS = [10, 15, 30, 60] as const;
 
+/** Buzz In flow: players gather in the lobby, play the board, then the optional Final Buzz In, then see the winner. */
+export type GamePhase = "lobby" | "playing" | "final" | "finished";
+/** Where the Final Buzz In question comes from. */
+export type FinalSource = "custom" | "random";
+
+export const FINAL_MIN_SECONDS = 15;
+export const FINAL_MAX_SECONDS = 300;
+export const FINAL_DEFAULT_SECONDS = 60;
+export const FINAL_PRESETS = [30, 60, 90, 120] as const;
+
+export type FinalSettings = {
+    enabled: boolean;
+    seconds: number;
+    source: FinalSource;
+    /** The custom question. Hidden ("") from everyone but the owner and host. */
+    category: string;
+    prompt: string;
+    answer: string;
+};
+
+export type FinalEntry = {
+    userId: string;
+    /** Other players' wagers and answers are hidden (null / "") until results are revealed. */
+    wager: number | null;
+    answer: string;
+    result: "pending" | "correct" | "incorrect";
+};
+
+export type FinalRound = {
+    stage: "answering" | "judging" | "revealed";
+    category: string;
+    prompt: string;
+    /** Hidden ("") from players until results are revealed. */
+    answer: string;
+    /** Server timestamp when answering closes. */
+    endsAt: number | null;
+    /** One entry per player who locked in. */
+    entries: FinalEntry[];
+};
+
 export type BoardClue = {
     id: string;
     value: number;
@@ -46,6 +86,17 @@ export type BoardCategory = {
 
 /** A clue together with its category name, e.g. the one currently on screen. */
 export type ActiveClue = BoardClue & { category: string };
+
+export function boardProgress(board: BoardCategory[]) {
+    const clues = board.flatMap((category) => category.clues);
+    const filled = clues.filter((clue) => clue.filled).length;
+    return { filled, total: clues.length, full: clues.length > 0 && filled === clues.length };
+}
+
+/** Players who compete: everyone except the owner and host, who can see the answers. */
+export function getContestants(room: Pick<RoomState, "players">) {
+    return room.players.filter((player) => !player.isHost && !player.isOwner);
+}
 
 export function findClue(board: BoardCategory[], clueId: string | null): ActiveClue | null {
     if (!clueId) return null;
@@ -116,6 +167,11 @@ export type RoomState = {
     board: BoardCategory[];
     buzz: BuzzState;
     removedCount: number;
+    phase: GamePhase;
+    /** Players who marked themselves ready in the lobby. */
+    readyUserIds: string[];
+    final: FinalSettings;
+    finalRound: FinalRound | null;
 };
 
 export type ClientMessage =
@@ -145,7 +201,29 @@ export type ClientMessage =
     | { type: "reveal_answer" }
     | { type: "end_question" }
     | { type: "reset_scores" }
-    | { type: "reset_board" };
+    | { type: "reset_board" }
+    | { type: "set_ready"; ready: boolean }
+    /** `force` starts even when some players aren't ready. */
+    | { type: "start_game"; force?: boolean }
+    | {
+        type: "update_final";
+        enabled?: boolean;
+        seconds?: number;
+        source?: FinalSource;
+        category?: string;
+        prompt?: string;
+        answer?: string;
+    }
+    /** Ends the board early and moves on to the Final Buzz In (or the winner screen). */
+    | { type: "finish_board" }
+    | { type: "submit_final"; wager: number; answer: string }
+    /** Closes Final Buzz In answers before the timer runs out. */
+    | { type: "lock_final" }
+    | { type: "judge_final"; userId: string; correct: boolean }
+    | { type: "reveal_final" }
+    | { type: "end_game" }
+    /** Clears scores and used clues and returns everyone to the lobby. */
+    | { type: "new_game" };
 
 export type ServerMessage =
     | { type: "lobby_state"; rooms: RoomSummary[] }
@@ -197,7 +275,25 @@ export function createEmptyRoom(slug: string, title = "Room"): RoomState {
         board: [],
         buzz: createEmptyBuzz(),
         removedCount: 0,
+        phase: "lobby",
+        readyUserIds: [],
+        final: createDefaultFinal(),
+        finalRound: null,
     };
+}
+
+export function createDefaultFinal(): FinalSettings {
+    return { enabled: true, seconds: FINAL_DEFAULT_SECONDS, source: "random", category: "", prompt: "", answer: "" };
+}
+
+export function isCustomFinalReady(final: Pick<FinalSettings, "prompt" | "answer">) {
+    return final.prompt.trim().length >= 2 && final.answer.trim().length >= 1;
+}
+
+/** Highest score first; tied players share a rank. */
+export function rankPlayers(players: RoomPlayer[]) {
+    const sorted = [...players].sort((left, right) => right.score - left.score);
+    return sorted.map((player) => ({ player, rank: sorted.findIndex((other) => other.score === player.score) + 1 }));
 }
 
 export function playerLabel(player: Pick<RoomPlayer, "name" | "displayNumber">) {

@@ -1,4 +1,10 @@
-import type * as Party from "partykit/server";
+import {
+    Server as PartyServer,
+    getServerByName,
+    routePartykitRequest,
+    type Connection,
+    type ConnectionContext,
+} from "partyserver";
 import { isAdminUser } from "../lib/auth/admins";
 import { signToken, toSessionUser, verifyToken } from "../lib/auth/token";
 import type { AuthProvider, SessionUser } from "../lib/auth/types";
@@ -14,20 +20,29 @@ import {
     createBlankCategory,
     createCategoryFromPrefilled,
     getPrefilledCategory,
+    isBoardFull,
     isClueFilled,
+    pickFinalQuestion,
     pickRandomPrefilled,
     type BoardCategoryData,
 } from "../lib/buzz-in";
 import {
     DEFAULT_TEAM_NAMES,
+    FINAL_MAX_SECONDS,
+    FINAL_MIN_SECONDS,
+    createDefaultFinal,
     createEmptyBuzz,
+    isCustomFinalReady,
     TIMER_MAX_SECONDS,
     TIMER_MIN_SECONDS,
     type AnswerMode,
     type BoardCategory,
     type BuzzState,
     type ClientMessage,
+    type FinalRound,
+    type FinalSettings,
     type GameMode,
+    type GamePhase,
     type PickMode,
     type PrimaryTeamId,
     type RoomPlayer,
@@ -52,7 +67,13 @@ type GameConnectionState = Identity & { kind: "game"; team: TeamId };
 type PreviewConnectionState = { kind: "preview" };
 type ConnectionState = LobbyConnectionState | GameConnectionState | PreviewConnectionState;
 
-type GamePlayer = { connection: Party.Connection<ConnectionState>; state: GameConnectionState };
+type GamePlayer = { connection: Connection<ConnectionState>; state: GameConnectionState };
+
+interface Env {
+    /** Durable Object binding; partyserver routes `/parties/main/:room` here (binding name in kebab-case). */
+    Main: DurableObjectNamespace<Server>;
+    AUTH_SECRET?: string;
+}
 
 type StoredRoomSummary = Omit<RoomSummary, "playerCount" | "gameMode"> & { gameMode?: GameMode };
 
@@ -75,6 +96,10 @@ type StoredRoomSettings = {
     buzz: BuzzState;
     scores: Record<string, number>;
     removedUserIds: string[];
+    phase: GamePhase;
+    readyUserIds: string[];
+    final: FinalSettings;
+    finalRound: FinalRound | null;
 };
 
 type InternalRequest =
@@ -132,10 +157,10 @@ function titleFromSlug(slug: string) {
         .join(" ") || "Untitled room";
 }
 
-function clampSeconds(value: unknown, fallback: number) {
+function clampSeconds(value: unknown, fallback: number, min = TIMER_MIN_SECONDS, max = TIMER_MAX_SECONDS) {
     const seconds = Math.round(Number(value));
     if (!Number.isFinite(seconds)) return fallback;
-    return Math.max(TIMER_MIN_SECONDS, Math.min(TIMER_MAX_SECONDS, seconds));
+    return Math.max(min, Math.min(max, seconds));
 }
 
 function isPrimaryTeam(team: TeamId): team is PrimaryTeamId {
@@ -169,33 +194,34 @@ function migrateLegacyQuestions(stored: object): BoardCategoryData[] | null {
     return board;
 }
 
-function bearerToken(request: Party.Request) {
+function bearerToken(request: Request) {
     const header = request.headers.get("authorization") ?? "";
     return header.startsWith("Bearer ") ? header.slice("Bearer ".length) : null;
 }
 
-export default class Server implements Party.Server {
-    constructor(readonly room: Party.Room) { }
+/** Durable Object stubs need an absolute URL; the host is ignored. */
+const INTERNAL_URL = "https://internal/";
 
+export class Server extends PartyServer<Env> {
     private get secret() {
-        const value = this.room.env.AUTH_SECRET;
+        const value = this.env.AUTH_SECRET;
         return typeof value === "string" ? value : "";
     }
 
     private get isLobby() {
-        return this.room.id === "lobby";
+        return this.name === "lobby";
     }
 
-    /** PartyKit throws when `room.id` is read inside `onAlarm`, so alarm code paths use the stored slug. */
+    /** `this.name` can throw for alarms scheduled before the name was persisted, so alarm code paths use the stored slug. */
     private safeRoomId() {
         try {
-            return this.room.id;
+            return this.name;
         } catch {
             return "";
         }
     }
 
-    async onConnect(connection: Party.Connection<ConnectionState>, context: Party.ConnectionContext) {
+    async onConnect(connection: Connection<ConnectionState>, context: ConnectionContext) {
         const url = new URL(context.request.url);
 
         if (this.isLobby) {
@@ -240,7 +266,7 @@ export default class Server implements Party.Server {
         await this.broadcastRoom(settings);
     }
 
-    async onMessage(rawMessage: string | ArrayBuffer | ArrayBufferView, sender: Party.Connection<ConnectionState>) {
+    async onMessage(sender: Connection<ConnectionState>, rawMessage: string | ArrayBuffer | ArrayBufferView) {
         if (typeof rawMessage !== "string") return;
 
         let message: ClientMessage;
@@ -258,7 +284,7 @@ export default class Server implements Party.Server {
         }
     }
 
-    async onClose(connection: Party.Connection<ConnectionState>) {
+    async onClose(connection: Connection<ConnectionState>) {
         if (this.isLobby) {
             await this.broadcastLobby();
             return;
@@ -302,25 +328,36 @@ export default class Server implements Party.Server {
     }
 
     async onAlarm() {
-        // Only game rooms schedule alarms; don't touch `room.id` here (unavailable in alarms).
+        // Only game rooms schedule alarms.
         const settings = await this.loadSettings();
         if (!settings) return;
 
+        const now = Date.now();
+        let changed = false;
         const buzz = settings.buzz;
-        if (!buzz.activeQuestionId || buzz.answerRevealed || !buzz.timerEndsAt) return;
-        if (buzz.timerEndsAt > Date.now()) {
-            await this.room.storage.setAlarm(buzz.timerEndsAt);
-            return;
+        if (buzz.activeQuestionId && !buzz.answerRevealed && buzz.timerEndsAt && buzz.timerEndsAt <= now) {
+            buzz.timerEndsAt = null;
+            buzz.timerPausedMs = null;
+            buzz.timerExpired = true;
+            if (settings.timerExpiryAction === "reveal") buzz.answerRevealed = true;
+            changed = true;
         }
 
-        buzz.timerEndsAt = null;
-        buzz.timerPausedMs = null;
-        buzz.timerExpired = true;
-        if (settings.timerExpiryAction === "reveal") buzz.answerRevealed = true;
-        await this.saveAndBroadcast(settings);
+        const round = settings.finalRound;
+        if (settings.phase === "final" && round?.stage === "answering" && round.endsAt && round.endsAt <= now) {
+            round.stage = "judging";
+            round.endsAt = null;
+            changed = true;
+        }
+
+        if (changed) {
+            await this.saveAndBroadcast(settings);
+        } else {
+            await this.scheduleAlarm(settings);
+        }
     }
 
-    async onRequest(request: Party.Request) {
+    async onRequest(request: Request) {
         if (request.method === "GET") {
             if (this.isLobby) return Response.json({ ok: true });
             const settings = await this.loadSettings();
@@ -366,7 +403,7 @@ export default class Server implements Party.Server {
 
     private async authenticate(url: URL): Promise<Identity | null> {
         if (!this.secret) {
-            console.error("AUTH_SECRET is not configured for PartyKit; every connection will be rejected.");
+            console.error("AUTH_SECRET is not configured for the party worker; every connection will be rejected.");
             return null;
         }
         const claims = await verifyToken<SessionUser>(url.searchParams.get("token"), this.secret, "party");
@@ -381,12 +418,12 @@ export default class Server implements Party.Server {
         };
     }
 
-    private reject(connection: Party.Connection, message: ServerMessage, code: number, reason: string) {
+    private reject(connection: Connection, message: ServerMessage, code: number, reason: string) {
         this.send(connection, message);
         connection.close(code, reason);
     }
 
-    private async handleLobbyMessage(message: ClientMessage, sender: Party.Connection<ConnectionState>) {
+    private async handleLobbyMessage(message: ClientMessage, sender: Connection<ConnectionState>) {
         const state = sender.state;
         if (state?.kind !== "lobby") return;
 
@@ -412,7 +449,7 @@ export default class Server implements Party.Server {
 
             const room: StoredRoomSummary = { slug, title, updatedAt: Date.now(), gameMode: "teams" };
             rooms.push(room);
-            await this.room.storage.put("rooms", rooms);
+            await this.ctx.storage.put("rooms", rooms);
             this.send(sender, { type: "room_created", room: { ...room, gameMode: "teams", playerCount: 0 } });
             await this.broadcastLobby();
             return;
@@ -428,14 +465,14 @@ export default class Server implements Party.Server {
 
             const rooms = await this.getStoredRooms();
             const target = rooms.find((room) => room.slug === slug);
-            await this.room.storage.put("rooms", rooms.filter((room) => room.slug !== slug));
+            await this.ctx.storage.put("rooms", rooms.filter((room) => room.slug !== slug));
             await this.internalFetch(slug, { action: "destroy" });
             this.send(sender, { type: "notice", message: `Deleted "${target?.title ?? slug}".` });
             await this.broadcastLobby();
         }
     }
 
-    private async handleRoomMessage(message: ClientMessage, sender: Party.Connection<ConnectionState>) {
+    private async handleRoomMessage(message: ClientMessage, sender: Connection<ConnectionState>) {
         const state = sender.state;
         if (state?.kind !== "game") return;
         const settings = await this.loadSettings();
@@ -506,6 +543,9 @@ export default class Server implements Party.Server {
                 if ((message.gameMode === "teams" || message.gameMode === "buzz_in") && message.gameMode !== previousMode) {
                     settings.gameMode = message.gameMode;
                     settings.buzz = createEmptyBuzz({ usedQuestionIds: buzz.usedQuestionIds });
+                    settings.phase = "lobby";
+                    settings.readyUserIds = [];
+                    settings.finalRound = null;
                 }
 
                 await this.saveAndBroadcast(settings);
@@ -684,7 +724,7 @@ export default class Server implements Party.Server {
 
             case "select_question": {
                 const isPicker = settings.pickMode === "player" && settings.pickerUserId === state.userId;
-                if ((!isHost && !isPicker) || settings.gameMode !== "buzz_in" || buzz.activeQuestionId) return;
+                if ((!isHost && !isPicker) || settings.gameMode !== "buzz_in" || settings.phase !== "playing" || buzz.activeQuestionId) return;
                 const clue = this.findBoardClue(settings, message.questionId);
                 if (!clue || !isClueFilled(clue) || buzz.usedQuestionIds.includes(clue.id)) return;
                 settings.buzz = createEmptyBuzz({ activeQuestionId: clue.id, usedQuestionIds: buzz.usedQuestionIds });
@@ -765,6 +805,8 @@ export default class Server implements Party.Server {
                 if (!isHost) return;
                 this.markActiveUsed(settings);
                 settings.buzz = createEmptyBuzz({ usedQuestionIds: buzz.usedQuestionIds });
+                // Closing the last clue on the board moves the game on to the Final Buzz In or the winner screen.
+                if (settings.phase === "playing" && this.remainingClueCount(settings) === 0) this.finishBoard(settings);
                 await this.saveAndBroadcast(settings);
                 return;
             }
@@ -784,7 +826,164 @@ export default class Server implements Party.Server {
                 await this.saveAndBroadcast(settings);
                 return;
             }
+
+            case "set_ready": {
+                if (seesAnswers || settings.gameMode !== "buzz_in" || settings.phase !== "lobby") return;
+                settings.readyUserIds = settings.readyUserIds.filter((userId) => userId !== state.userId);
+                if (message.ready) settings.readyUserIds.push(state.userId);
+                await this.saveAndBroadcast(settings);
+                return;
+            }
+
+            case "start_game": {
+                if (!isOwner && !isHost && !isAdmin) return deny("Only the room owner or host can start the game.");
+                if (settings.gameMode !== "buzz_in" || settings.phase !== "lobby") return;
+                if (!isBoardFull(settings.board)) return deny("Fill every clue on the board before starting.");
+                const contestants = this.contestantIds(settings);
+                if (contestants.length === 0) return deny("Wait for at least one player to join.");
+                const notReady = contestants.filter((userId) => !settings.readyUserIds.includes(userId));
+                if (notReady.length > 0 && !message.force) return deny("Not everyone is ready yet.");
+                settings.phase = "playing";
+                settings.readyUserIds = [];
+                settings.buzz = createEmptyBuzz();
+                settings.pickerUserId = null;
+                settings.finalRound = null;
+                await this.saveAndBroadcast(settings);
+                return;
+            }
+
+            case "update_final": {
+                if (!seesAnswers) return deny("Only the room owner or host can set up the Final Buzz In.");
+                const final = settings.final;
+                if (typeof message.enabled === "boolean") final.enabled = message.enabled;
+                if (message.seconds !== undefined) {
+                    final.seconds = clampSeconds(message.seconds, final.seconds, FINAL_MIN_SECONDS, FINAL_MAX_SECONDS);
+                }
+                if (message.source === "custom" || message.source === "random") final.source = message.source;
+                if (message.category !== undefined) final.category = cleanContent(message.category, 40);
+                if (message.prompt !== undefined) final.prompt = cleanContent(message.prompt, 240);
+                if (message.answer !== undefined) final.answer = cleanContent(message.answer, 160);
+                await this.saveAndBroadcast(settings);
+                return;
+            }
+
+            case "finish_board": {
+                if (!seesAnswers || settings.phase !== "playing") return;
+                if (buzz.activeQuestionId) return deny("Close the clue on screen first.");
+                this.finishBoard(settings);
+                await this.saveAndBroadcast(settings);
+                return;
+            }
+
+            case "submit_final": {
+                const round = settings.finalRound;
+                if (seesAnswers || settings.phase !== "final" || !round) return;
+                if (round.stage !== "answering" || (round.endsAt !== null && round.endsAt <= Date.now())) return deny("Time's up.");
+                if (round.entries.some((entry) => entry.userId === state.userId)) return deny("Your answer is already locked in.");
+                const answer = cleanContent(message.answer, 160);
+                if (!answer) return deny("Type an answer first.");
+                const maxWager = Math.max(0, settings.scores[state.userId] ?? 0);
+                const requested = Math.round(Number(message.wager));
+                const wager = Number.isFinite(requested) ? Math.max(0, Math.min(maxWager, requested)) : 0;
+                round.entries.push({ userId: state.userId, wager, answer, result: "pending" });
+                // Once every player has locked in there's no need to wait for the clock.
+                const contestants = this.contestantIds(settings);
+                if (contestants.every((userId) => round.entries.some((entry) => entry.userId === userId))) {
+                    round.stage = "judging";
+                    round.endsAt = null;
+                }
+                await this.saveAndBroadcast(settings);
+                return;
+            }
+
+            case "lock_final": {
+                const round = settings.finalRound;
+                if (!seesAnswers || settings.phase !== "final" || round?.stage !== "answering") return;
+                round.stage = "judging";
+                round.endsAt = null;
+                await this.saveAndBroadcast(settings);
+                return;
+            }
+
+            case "judge_final": {
+                const round = settings.finalRound;
+                if (!seesAnswers || settings.phase !== "final" || round?.stage !== "judging") return;
+                const entry = round.entries.find((candidate) => candidate.userId === message.userId);
+                if (!entry) return;
+                entry.result = message.correct ? "correct" : "incorrect";
+                await this.saveAndBroadcast(settings);
+                return;
+            }
+
+            case "reveal_final": {
+                const round = settings.finalRound;
+                if (!seesAnswers || settings.phase !== "final" || round?.stage !== "judging") return;
+                if (round.entries.some((entry) => entry.result === "pending")) return deny("Judge every answer first.");
+                for (const entry of round.entries) {
+                    const wager = entry.wager ?? 0;
+                    settings.scores[entry.userId] = (settings.scores[entry.userId] ?? 0) + (entry.result === "correct" ? wager : -wager);
+                }
+                round.stage = "revealed";
+                await this.saveAndBroadcast(settings);
+                return;
+            }
+
+            case "end_game": {
+                if (!seesAnswers || (settings.phase !== "final" && settings.phase !== "playing")) return;
+                if (settings.phase === "final" && settings.finalRound?.stage !== "revealed") return deny("Reveal the results first.");
+                if (buzz.activeQuestionId) return deny("Close the clue on screen first.");
+                settings.phase = "finished";
+                await this.saveAndBroadcast(settings);
+                return;
+            }
+
+            case "new_game": {
+                if (!isOwner && !isHost && !isAdmin) return deny("Only the room owner or host can start a new game.");
+                settings.phase = "lobby";
+                settings.readyUserIds = [];
+                settings.scores = {};
+                settings.buzz = createEmptyBuzz();
+                settings.pickerUserId = null;
+                settings.finalRound = null;
+                await this.saveAndBroadcast(settings);
+                return;
+            }
         }
+    }
+
+    /** Connected players who compete (everyone but the owner and host). */
+    private contestantIds(settings: StoredRoomSettings) {
+        return this.collectPlayers(settings)
+            .filter((player) => player.userId !== settings.ownerId && player.userId !== settings.hostId)
+            .map((player) => player.userId);
+    }
+
+    private remainingClueCount(settings: StoredRoomSettings) {
+        return settings.board
+            .flatMap((category) => category.clues)
+            .filter((clue) => isClueFilled(clue) && !settings.buzz.usedQuestionIds.includes(clue.id)).length;
+    }
+
+    /** The board is done: start the Final Buzz In if it's on, otherwise go straight to the winner screen. */
+    private finishBoard(settings: StoredRoomSettings) {
+        settings.buzz = createEmptyBuzz({ usedQuestionIds: settings.buzz.usedQuestionIds });
+        if (!settings.final.enabled) {
+            settings.phase = "finished";
+            settings.finalRound = null;
+            return;
+        }
+        const final = settings.final;
+        const question =
+            final.source === "custom" && isCustomFinalReady(final)
+                ? { category: final.category || "Final Buzz In", prompt: final.prompt, answer: final.answer }
+                : pickFinalQuestion(settings.board);
+        settings.phase = "final";
+        settings.finalRound = {
+            stage: "answering",
+            ...question,
+            endsAt: Date.now() + final.seconds * 1000,
+            entries: [],
+        };
     }
 
     private startTimer(settings: StoredRoomSettings) {
@@ -837,16 +1036,20 @@ export default class Server implements Party.Server {
             buzz: createEmptyBuzz(),
             scores: {},
             removedUserIds: [],
+            phase: "lobby",
+            readyUserIds: [],
+            final: createDefaultFinal(),
+            finalRound: null,
         };
     }
 
     private async getStoredRooms() {
-        return (await this.room.storage.get<StoredRoomSummary[]>("rooms")) ?? [];
+        return (await this.ctx.storage.get<StoredRoomSummary[]>("rooms")) ?? [];
     }
 
     /** Returns null when the room was never created (or has been deleted). */
     private async loadSettings(): Promise<StoredRoomSettings | null> {
-        const stored = await this.room.storage.get<Partial<StoredRoomSettings>>("settings");
+        const stored = await this.ctx.storage.get<Partial<StoredRoomSettings>>("settings");
         if (!stored) return null;
         const defaults = this.defaultSettings();
         const { questions: _legacyQuestions, ...current } = stored as Partial<StoredRoomSettings> & { questions?: unknown };
@@ -861,15 +1064,33 @@ export default class Server implements Party.Server {
             scores: stored.scores ?? {},
             removedUserIds: stored.removedUserIds ?? [],
             hostId: stored.hostId || stored.ownerId || "",
+            // Rooms saved before the lobby existed keep playing if a game was already underway.
+            phase: stored.phase ?? (stored.buzz?.activeQuestionId || stored.buzz?.usedQuestionIds?.length ? "playing" : "lobby"),
+            readyUserIds: stored.readyUserIds ?? [],
+            final: {
+                ...defaults.final,
+                ...stored.final,
+                seconds: clampSeconds(stored.final?.seconds, defaults.final.seconds, FINAL_MIN_SECONDS, FINAL_MAX_SECONDS),
+            },
+            finalRound: stored.finalRound ?? null,
         };
     }
 
     private async saveSettings(settings: StoredRoomSettings) {
-        await this.room.storage.put("settings", settings);
-        if (settings.buzz.timerEndsAt) {
-            await this.room.storage.setAlarm(settings.buzz.timerEndsAt);
+        await this.ctx.storage.put("settings", settings);
+        await this.scheduleAlarm(settings);
+    }
+
+    /** One alarm covers both the clue timer and the Final Buzz In timer. */
+    private async scheduleAlarm(settings: StoredRoomSettings) {
+        const due: number[] = [];
+        if (settings.buzz.timerEndsAt) due.push(settings.buzz.timerEndsAt);
+        const round = settings.finalRound;
+        if (settings.phase === "final" && round?.stage === "answering" && round.endsAt) due.push(round.endsAt);
+        if (due.length > 0) {
+            await this.ctx.storage.setAlarm(Math.min(...due));
         } else {
-            await this.room.storage.deleteAlarm();
+            await this.ctx.storage.deleteAlarm();
         }
     }
 
@@ -879,9 +1100,9 @@ export default class Server implements Party.Server {
     }
 
     private async destroyRoom() {
-        await this.room.storage.deleteAlarm();
-        await this.room.storage.deleteAll();
-        for (const connection of this.room.getConnections()) {
+        await this.ctx.storage.deleteAlarm();
+        await this.ctx.storage.deleteAll();
+        for (const connection of this.getConnections()) {
             this.send(connection, { type: "room_deleted" });
             connection.close(CLOSE_DELETED, "Room deleted");
         }
@@ -889,7 +1110,7 @@ export default class Server implements Party.Server {
 
     private gamePlayers(): GamePlayer[] {
         const players: GamePlayer[] = [];
-        for (const connection of this.room.getConnections<ConnectionState>()) {
+        for (const connection of this.getConnections<ConnectionState>()) {
             const state = connection.state;
             if (state?.kind === "game") players.push({ connection, state });
         }
@@ -945,10 +1166,10 @@ export default class Server implements Party.Server {
     }
 
     private async internalFetch(slug: string, body: InternalRequest) {
-        const namespace = this.room.context.parties[this.room.name];
-        if (!namespace || !this.secret) return null;
-        const token = await signToken({ from: this.room.id }, this.secret, "internal", 60);
-        return namespace.get(slug).fetch("/", {
+        if (!this.secret) return null;
+        const token = await signToken({ from: this.name }, this.secret, "internal", 60);
+        const stub = await getServerByName(this.env.Main, slug);
+        return stub.fetch(INTERNAL_URL, {
             method: "POST",
             headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
             body: JSON.stringify(body),
@@ -956,14 +1177,13 @@ export default class Server implements Party.Server {
     }
 
     private async notifyLobby() {
-        await this.internalFetch("lobby", { action: "refresh_room", slug: this.room.id });
+        await this.internalFetch("lobby", { action: "refresh_room", slug: this.name });
     }
 
     private async refreshLobbyRoom(slug: string) {
         if (!slug) return;
-        const namespace = this.room.context.parties[this.room.name];
-        if (!namespace) return;
-        const response = await namespace.get(slug).fetch("/");
+        const stub = await getServerByName(this.env.Main, slug);
+        const response = await stub.fetch(INTERNAL_URL);
         if (!response.ok) return;
         const details = (await response.json()) as { title?: string; gameMode?: GameMode };
         const rooms = await this.getStoredRooms();
@@ -972,7 +1192,7 @@ export default class Server implements Party.Server {
         if (details.title) room.title = details.title;
         if (details.gameMode) room.gameMode = details.gameMode;
         room.updatedAt = Date.now();
-        await this.room.storage.put("rooms", rooms);
+        await this.ctx.storage.put("rooms", rooms);
         await this.broadcastLobby();
     }
 
@@ -980,7 +1200,7 @@ export default class Server implements Party.Server {
         const storedRooms = await this.getStoredRooms();
         const presence = new Map<string, Set<string>>();
 
-        for (const connection of this.room.getConnections<ConnectionState>()) {
+        for (const connection of this.getConnections<ConnectionState>()) {
             const state = connection.state;
             if (state?.kind !== "lobby" || !state.roomSlug) continue;
             const users = presence.get(state.roomSlug) ?? new Set<string>();
@@ -997,7 +1217,7 @@ export default class Server implements Party.Server {
                 playerCount: presence.get(room.slug)?.size ?? 0,
             }))
             .sort((left, right) => right.playerCount - left.playerCount || right.updatedAt - left.updatedAt);
-        this.room.broadcast(JSON.stringify({ type: "lobby_state", rooms } satisfies ServerMessage));
+        this.broadcast(JSON.stringify({ type: "lobby_state", rooms } satisfies ServerMessage));
     }
 
     private collectPlayers(settings: StoredRoomSettings): RoomPlayer[] {
@@ -1058,6 +1278,10 @@ export default class Server implements Party.Server {
             })),
             buzz: settings.buzz,
             removedCount: settings.removedUserIds.length,
+            phase: settings.phase,
+            readyUserIds: settings.readyUserIds,
+            final: settings.final,
+            finalRound: settings.finalRound,
         };
     }
 
@@ -1068,22 +1292,30 @@ export default class Server implements Party.Server {
         const room = this.buildRoomState(current);
         const redacted = this.redactAnswers(room);
         const serverTime = Date.now();
+        // Players get their own Final Buzz In entry, so their copy is redacted per user while answers are hidden.
+        const perUser = current.finalRound !== null && current.finalRound.stage !== "revealed";
 
-        for (const connection of this.room.getConnections<ConnectionState>()) {
+        for (const connection of this.getConnections<ConnectionState>()) {
             const state = connection.state;
             if (state?.kind === "game") {
                 // The owner and host build the board, so they see clues and answers; nobody else does early.
                 const seesAnswers = state.userId === current.hostId || state.userId === current.ownerId;
-                this.send(connection, { type: "room_state", room: seesAnswers ? room : redacted, serverTime });
+                const view = seesAnswers ? room : perUser ? this.redactAnswers(room, state.userId) : redacted;
+                this.send(connection, { type: "room_state", room: view, serverTime });
             } else if (state?.kind === "preview") {
                 this.send(connection, { type: "preview_state", room: redacted, serverTime });
             }
         }
     }
 
-    /** Hides every prompt except the clue on screen, and every answer until it's revealed. */
-    private redactAnswers(room: RoomState): RoomState {
+    /**
+     * Hides every prompt except the clue on screen, every answer until it's revealed, the custom final question,
+     * and other players' Final Buzz In wagers and answers until the results are revealed.
+     */
+    private redactAnswers(room: RoomState, viewerId: string | null = null): RoomState {
         const { activeQuestionId, answerRevealed } = room.buzz;
+        const round = room.finalRound;
+        const revealed = round?.stage === "revealed";
         return {
             ...room,
             buzz: { ...room.buzz, attempts: [] },
@@ -1095,10 +1327,22 @@ export default class Server implements Party.Server {
                     answer: clue.id === activeQuestionId && answerRevealed ? clue.answer : "",
                 })),
             })),
+            final: { ...room.final, category: "", prompt: "", answer: "" },
+            finalRound: round && {
+                ...round,
+                answer: revealed ? round.answer : "",
+                entries: round.entries.map((entry) =>
+                    revealed
+                        ? entry
+                        : entry.userId === viewerId
+                            ? { ...entry, result: "pending" }
+                            : { ...entry, wager: null, answer: "", result: "pending" }
+                ),
+            },
         };
     }
 
-    private send(connection: Party.Connection, message: ServerMessage) {
+    private send(connection: Connection, message: ServerMessage) {
         try {
             connection.send(JSON.stringify(message));
         } catch {
@@ -1107,4 +1351,8 @@ export default class Server implements Party.Server {
     }
 }
 
-Server satisfies Party.Worker;
+export default {
+    async fetch(request: Request, env: Env) {
+        return (await routePartykitRequest(request, env)) ?? new Response("Not found", { status: 404 });
+    },
+} satisfies ExportedHandler<Env>;

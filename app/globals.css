@@ -113,6 +113,16 @@ a {
     -webkit-tap-highlight-color: transparent;
 }
 
+@keyframes shimmer {
+    from {
+        background-position: 200% 0;
+    }
+
+    to {
+        background-position: 0% 0;
+    }
+}
+
 @media (prefers-reduced-motion: reduce) {
 
     *,

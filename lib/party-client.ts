@@ -3,7 +3,13 @@
 import PartySocket from "partysocket";
 import type { ServerMessage } from "./protocol";
 
-export const PARTY_HOST = process.env.NEXT_PUBLIC_PARTYKIT_HOST ?? "localhost:1999";
+const PRODUCTION_PARTY_HOST = "roundtable-api.dylandover.dev";
+const DEVELOPMENT_PARTY_HOST = "localhost:1999";
+
+/** `NEXT_PUBLIC_PARTYKIT_HOST` overrides the default: the deployed worker in production builds, `wrangler dev` otherwise. */
+export const PARTY_HOST =
+    process.env.NEXT_PUBLIC_PARTYKIT_HOST ||
+    (process.env.NODE_ENV === "production" ? PRODUCTION_PARTY_HOST : DEVELOPMENT_PARTY_HOST);
 
 export type ConnectionStatus = "connecting" | "live" | "offline";
 

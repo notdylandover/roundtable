@@ -17,8 +17,9 @@
 /.next/
 /out/
 
-# partykit
-/.partykit/
+# cloudflare workers
+/.wrangler/
+.dev.vars*
 
 # production
 /build
