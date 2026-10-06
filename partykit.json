@@ -3,5 +3,5 @@
     "name": "roundtable",
     "main": "party/index.ts",
     "compatibilityDate": "2026-10-05",
-    "domain": "https://roundtable.business-ddover.workers.dev/"
+    "domain": "https://roundtable-api.dylandover.dev"
 }
