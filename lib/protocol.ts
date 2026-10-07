@@ -1,3 +1,4 @@
+import type { AnswerLeniency } from "./answer-match";
 import type { AuthProvider } from "./auth/types";
 
 export type PrimaryTeamId = "sun" | "moon";
@@ -14,6 +15,8 @@ export type PickMode = "host" | "player";
 export type GameRules = {
     answerMode: AnswerMode;
     pickMode: PickMode;
+    /** How forgiving the "looks right / close" hints are when judging typed answers. */
+    leniency: AnswerLeniency;
 };
 
 export type AnswerAttempt = {
@@ -187,7 +190,7 @@ export type ClientMessage =
     | { type: "clear_removed_players" }
     | { type: "update_timer"; enabled: boolean; seconds: number; expiryAction: TimerExpiryAction }
     | { type: "restart_timer" }
-    | { type: "update_rules"; answerMode?: AnswerMode; pickMode?: PickMode }
+    | { type: "update_rules"; answerMode?: AnswerMode; pickMode?: PickMode; leniency?: AnswerLeniency }
     | { type: "submit_answer"; text: string }
     | { type: "set_category_count"; count: number }
     | { type: "rename_category"; categoryId: string; name: string }
@@ -269,7 +272,7 @@ export function createEmptyRoom(slug: string, title = "Room"): RoomState {
         maxPlayersPerTeam: 8,
         gameMode: "teams",
         timer: { enabled: false, seconds: 30, expiryAction: "reveal" },
-        rules: { answerMode: "spoken", pickMode: "host" },
+        rules: { answerMode: "spoken", pickMode: "host", leniency: "balanced" },
         pickerUserId: null,
         players: [],
         board: [],

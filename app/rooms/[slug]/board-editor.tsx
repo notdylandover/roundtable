@@ -1,11 +1,10 @@
 "use client";
 
-import { Eraser, LayoutGrid, MoreHorizontal, Pencil, Plus, Sparkles, Trash2 } from "lucide-react";
+import { Eraser, KeyRound, LayoutGrid, MoreHorizontal, Pencil, Plus, Sparkles, Trash2 } from "lucide-react";
 import { useState, type FormEvent } from "react";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import {
     Dialog,
     DialogContent,
@@ -76,7 +75,7 @@ function CategoryName({ category, send }: { category: BoardCategory; send: Send 
                     event.currentTarget.blur();
                 }
             }}
-            className="h-auto min-h-10 border-transparent bg-transparent px-1 text-center text-xs font-bold text-white uppercase placeholder:text-white/40 hover:border-white/20 focus-visible:border-white/40 focus-visible:ring-white/20 md:text-xs"
+            className="h-auto min-h-10 border-transparent bg-transparent px-1 text-center text-xs font-bold text-white uppercase placeholder:text-white/40 hover:border-white/20 focus-visible:border-white/40 focus-visible:ring-white/20 md:text-xs dark:bg-transparent"
         />
     );
 }
@@ -153,7 +152,7 @@ function ClueDialog({ editing, onClose, send }: { editing: EditingClue; onClose:
                         <DialogDescription>Players only see this clue once it&apos;s picked from the board.</DialogDescription>
                     </DialogHeader>
                     <Field>
-                        <FieldLabel htmlFor="clue-value" className={LABEL}>Value</FieldLabel>
+                        <FieldLabel htmlFor="clue-value" className={LABEL}>Points</FieldLabel>
                         <Input
                             id="clue-value"
                             type="number"
@@ -167,7 +166,7 @@ function ClueDialog({ editing, onClose, send }: { editing: EditingClue; onClose:
                         />
                     </Field>
                     <Field>
-                        <FieldLabel htmlFor="clue-prompt" className={LABEL}>Question</FieldLabel>
+                        <FieldLabel htmlFor="clue-prompt" className={LABEL}>Question or statement</FieldLabel>
                         <Textarea
                             id="clue-prompt"
                             autoFocus
@@ -215,6 +214,7 @@ function ClueDialog({ editing, onClose, send }: { editing: EditingClue; onClose:
     );
 }
 
+/** Full-height board editor shown on the stage in edit mode. */
 export function BoardEditor({ room, send }: { room: RoomState; send: Send }) {
     const [editing, setEditing] = useState<EditingClue | null>(null);
     const [pendingCount, setPendingCount] = useState<number | null>(null);
@@ -230,28 +230,24 @@ export function BoardEditor({ room, send }: { room: RoomState; send: Send }) {
     }
 
     return (
-        <Card className="gap-0 overflow-hidden rounded-xl border-2 border-ink py-0 text-ink shadow-[4px_4px_0_var(--ink)] ring-0">
-            <CardHeader className="border-b-2 border-ink bg-paper py-4">
-                <CardTitle className="flex items-center gap-2 text-base font-bold">
-                    <LayoutGrid className="size-4" /> Clues
-                </CardTitle>
-                <CardDescription>
-                    Name each category and click a tile to write its clue, or load prefilled categories. Only you and
-                    the host can see clues before they&apos;re picked.
-                </CardDescription>
-                <CardAction className="self-center">
-                    <Badge
-                        variant="outline"
-                        className={cn("h-6 border-2 px-2.5 font-mono", filledCount === clues.length ? "border-pine/40 bg-green-100 text-pine" : "border-ink/15 bg-white")}
-                    >
-                        {filledCount}/{clues.length} ready
-                    </Badge>
-                </CardAction>
-            </CardHeader>
-
-            <div className="flex flex-wrap items-end gap-3 border-b-2 border-ink bg-white px-4 py-3">
-                <Field className="w-auto">
-                    <FieldLabel className={LABEL}>Board size</FieldLabel>
+        <div className="flex h-full flex-col gap-3">
+            <div className="flex flex-wrap items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-2">
+                <span className="flex items-center gap-2 text-sm font-bold">
+                    <LayoutGrid className="size-4 text-mustard" /> Edit board
+                </span>
+                <Badge
+                    variant="outline"
+                    className={cn(
+                        "h-6 border px-2.5 font-mono",
+                        filledCount === clues.length ? "border-green-400/40 bg-green-400/15 text-green-300" : "border-white/20 text-white/70"
+                    )}
+                >
+                    {filledCount}/{clues.length} ready
+                </Badge>
+                <span className="hidden text-xs text-white/50 @4xl:inline">
+                    Click a tile to write its clue. Only you and the host can see this.
+                </span>
+                <div className="ml-auto flex flex-wrap items-center gap-2">
                     <Select
                         items={COUNT_ITEMS}
                         value={String(board.length)}
@@ -260,7 +256,7 @@ export function BoardEditor({ room, send }: { room: RoomState; send: Send }) {
                             if (count && count !== board.length) changeCount(count);
                         }}
                     >
-                        <SelectTrigger className="w-44 bg-white data-[size=default]:h-9">
+                        <SelectTrigger aria-label="Board size" className="w-40 border-white/20 bg-white/5 text-white data-[size=default]:h-9">
                             <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
@@ -271,76 +267,51 @@ export function BoardEditor({ room, send }: { room: RoomState; send: Send }) {
                             ))}
                         </SelectContent>
                     </Select>
-                </Field>
-                <ConfirmDialog
-                    trigger={
-                        <Button variant="outline" className="h-9 border-2 border-ink" disabled={Boolean(buzz.activeQuestionId)}>
-                            <Sparkles /> Use prefilled board
-                        </Button>
-                    }
-                    icon={<Sparkles />}
-                    title="Fill the board with prefilled categories?"
-                    description={`All ${board.length} columns are replaced with random prefilled categories and clues. Anything you've written on this board is lost.`}
-                    confirmLabel="Use prefilled board"
-                    onConfirm={() => send({ type: "use_prefilled_board" })}
-                />
-                <p className="ml-auto max-w-xs text-xs text-ink/60">
-                    Up to {MAX_CATEGORIES} categories with {CLUES_PER_CATEGORY} clues each. Empty tiles are skipped during play.
-                </p>
+                    <ConfirmDialog
+                        trigger={
+                            <Button
+                                variant="outline"
+                                className="h-9 border-white/20 bg-white/5 text-white hover:bg-white/15"
+                                disabled={Boolean(buzz.activeQuestionId)}
+                            >
+                                <Sparkles /> Use prefilled board
+                            </Button>
+                        }
+                        icon={<Sparkles />}
+                        title="Fill the board with prefilled categories?"
+                        description={`All ${board.length} columns are replaced with random prefilled categories and clues. Anything you've written on this board is lost.`}
+                        confirmLabel="Use prefilled board"
+                        onConfirm={() => send({ type: "use_prefilled_board" })}
+                    />
+                </div>
             </div>
 
-            <CardContent className="overflow-x-auto bg-ink p-2">
-                <div className="grid gap-2" style={{ gridTemplateColumns: `repeat(${board.length}, minmax(10rem, 1fr))` }}>
-                    {board.map((category) => (
-                        <div key={category.id} className="flex flex-col gap-2">
-                            <div className="flex min-h-16 items-center gap-1 rounded-md bg-board px-1.5">
-                                <CategoryName key={category.name} category={category} send={send} />
-                                <CategoryMenu category={category} onBoard={onBoard} send={send} />
-                            </div>
-                            {category.clues.map((clue) => {
-                                const used = buzz.usedQuestionIds.includes(clue.id);
-                                const onScreen = buzz.activeQuestionId === clue.id;
-                                return (
-                                    <button
-                                        key={clue.id}
-                                        type="button"
-                                        disabled={onScreen}
-                                        onClick={() => setEditing({ category, clue })}
-                                        className={cn(
-                                            "group flex h-20 cursor-pointer flex-col items-center justify-center gap-1 rounded-md px-2 text-center outline-none focus-visible:ring-3 focus-visible:ring-aqua disabled:cursor-not-allowed",
-                                            clue.filled
-                                                ? "bg-board text-white hover:bg-board/80"
-                                                : "border-2 border-dashed border-white/25 text-white/50 hover:border-white/50 hover:text-white",
-                                            (used || onScreen) && "opacity-50"
-                                        )}
-                                    >
-                                        <span className={cn("font-pixel-square text-xl leading-none", clue.filled && "text-mustard")}>
-                                            {clue.value}
-                                        </span>
-                                        <span className="line-clamp-2 text-[10px] leading-tight">
-                                            {onScreen ? (
-                                                "On screen"
-                                            ) : clue.filled ? (
-                                                <>
-                                                    {used && "Used · "}
-                                                    {clue.prompt}
-                                                </>
-                                            ) : (
-                                                <>
-                                                    <Plus className="inline size-3 align-[-2px]" /> Add clue
-                                                </>
-                                            )}
-                                        </span>
-                                        {clue.filled && !onScreen && (
-                                            <Pencil className="hidden size-3 text-white/60 group-hover:block" aria-hidden="true" />
-                                        )}
-                                    </button>
-                                );
-                            })}
-                        </div>
-                    ))}
+            <div className="min-h-0 flex-1 overflow-auto rounded-xl">
+                <div
+                    className="grid h-full min-h-[36rem] gap-2"
+                    style={{
+                        gridAutoFlow: "column",
+                        gridTemplateColumns: `repeat(${board.length}, minmax(11rem, 1fr))`,
+                        gridTemplateRows: `auto repeat(${CLUES_PER_CATEGORY}, minmax(6.5rem, 1fr))`,
+                    }}
+                >
+                    {board.map((category) => [
+                        <div key={category.id} className="flex min-h-14 items-center gap-1 rounded-lg bg-board px-1.5 shadow-[inset_0_-3px_0_rgba(0,0,0,0.25)]">
+                            <CategoryName key={category.name} category={category} send={send} />
+                            <CategoryMenu category={category} onBoard={onBoard} send={send} />
+                        </div>,
+                        ...category.clues.map((clue) => (
+                            <ClueTile
+                                key={clue.id}
+                                clue={clue}
+                                used={buzz.usedQuestionIds.includes(clue.id)}
+                                onScreen={buzz.activeQuestionId === clue.id}
+                                onEdit={() => setEditing({ category, clue })}
+                            />
+                        )),
+                    ])}
                 </div>
-            </CardContent>
+            </div>
 
             {editing && <ClueDialog key={editing.clue.id} editing={editing} onClose={() => setEditing(null)} send={send} />}
 
@@ -357,6 +328,57 @@ export function BoardEditor({ room, send }: { room: RoomState; send: Send }) {
                     setPendingCount(null);
                 }}
             />
-        </Card>
+        </div>
+    );
+}
+
+/** One editable tile: points, the question, and the answer. */
+function ClueTile({ clue, used, onScreen, onEdit }: { clue: BoardClue; used: boolean; onScreen: boolean; onEdit: () => void }) {
+    const empty = !clue.prompt && !clue.answer;
+
+    return (
+        <button
+            type="button"
+            disabled={onScreen}
+            onClick={onEdit}
+            className={cn(
+                "group relative flex min-h-0 cursor-pointer flex-col gap-1.5 overflow-hidden rounded-lg p-2.5 text-left outline-none focus-visible:ring-3 focus-visible:ring-aqua disabled:cursor-not-allowed",
+                clue.filled
+                    ? "bg-board text-white shadow-[inset_0_-3px_0_rgba(0,0,0,0.25)] hover:brightness-110"
+                    : "border-2 border-dashed border-white/20 text-white/60 hover:border-white/45 hover:text-white",
+                (used || onScreen) && "opacity-50"
+            )}
+        >
+            <span className="flex items-center justify-between gap-2">
+                <span className="font-pixel-square text-xl leading-none text-mustard">{clue.value}</span>
+                {onScreen ? (
+                    <span className="font-mono text-[9px] tracking-widest text-white/70 uppercase">On screen</span>
+                ) : used ? (
+                    <span className="font-mono text-[9px] tracking-widest text-white/70 uppercase">Used</span>
+                ) : (
+                    <Pencil className="size-3.5 text-white/60 opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100" aria-hidden="true" />
+                )}
+            </span>
+            {empty ? (
+                <span className="m-auto flex items-center gap-1 text-xs font-semibold">
+                    <Plus className="size-3.5" /> Add clue
+                </span>
+            ) : (
+                <>
+                    <span className={cn("line-clamp-3 text-xs leading-snug", clue.prompt ? "text-white/90" : "text-coral italic")}>
+                        {clue.prompt || "Needs a question"}
+                    </span>
+                    <span
+                        className={cn(
+                            "mt-auto flex min-w-0 items-center gap-1 rounded-md bg-black/25 px-1.5 py-1 text-xs font-bold",
+                            clue.answer ? "text-green-300" : "text-coral italic"
+                        )}
+                    >
+                        <KeyRound className="size-3 shrink-0" />
+                        <span className="truncate">{clue.answer || "Needs an answer"}</span>
+                    </span>
+                </>
+            )}
+        </button>
     );
 }

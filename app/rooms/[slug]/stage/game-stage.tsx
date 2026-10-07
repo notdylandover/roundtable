@@ -9,6 +9,7 @@ import type { Send, Viewer } from "../viewer";
 import { Board, ClueOverlay } from "./board";
 import { ClueControls } from "./clue-controls";
 import { FinalStage } from "./final";
+import { GameStartWipe } from "./game-start-wipe";
 import { LobbyStage } from "./lobby";
 import { StandBy } from "./primitives";
 import { WinnerStage } from "./winner";
@@ -21,6 +22,7 @@ type StageBodyProps = {
     send?: Send;
     joinUrl?: string;
     renderActions?: (player: RoomPlayer) => ReactNode;
+    onEditBoard?: () => void;
 };
 
 /** Score rail is shown while clues are being played and during the Final Buzz In. */
@@ -68,23 +70,33 @@ export function StageBody(props: StageBodyProps) {
     }
 
     return (
-        <AnimatePresence mode="wait">
-            <motion.div
-                key={room.phase}
-                className="relative h-full"
-                initial={{ opacity: 0, scale: 0.97 }}
-                animate={{ opacity: 1, scale: 1 }}
-                exit={{ opacity: 0, scale: 1.03 }}
-                transition={{ duration: 0.35 }}
-            >
-                {room.phase === "lobby" && (
-                    <LobbyStage room={room} viewer={props.viewer} send={props.send} joinUrl={props.joinUrl} renderActions={props.renderActions} />
-                )}
-                {room.phase === "playing" && <PlayingStage {...props} />}
-                {room.phase === "final" && <FinalStage room={room} clockOffset={props.clockOffset} viewer={props.viewer} send={props.send} />}
-                {room.phase === "finished" && <WinnerStage room={room} viewer={props.viewer} send={props.send} />}
-            </motion.div>
-        </AnimatePresence>
+        <>
+            <AnimatePresence mode="wait">
+                <motion.div
+                    key={room.phase}
+                    className="relative h-full"
+                    initial={{ opacity: 0, scale: 0.97 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    exit={{ opacity: 0, scale: 1.03 }}
+                    transition={{ duration: 0.35 }}
+                >
+                    {room.phase === "lobby" && (
+                        <LobbyStage
+                            room={room}
+                            viewer={props.viewer}
+                            send={props.send}
+                            joinUrl={props.joinUrl}
+                            renderActions={props.renderActions}
+                            onEditBoard={props.onEditBoard}
+                        />
+                    )}
+                    {room.phase === "playing" && <PlayingStage {...props} />}
+                    {room.phase === "final" && <FinalStage room={room} clockOffset={props.clockOffset} viewer={props.viewer} send={props.send} />}
+                    {room.phase === "finished" && <WinnerStage room={room} viewer={props.viewer} send={props.send} />}
+                </motion.div>
+            </AnimatePresence>
+            <GameStartWipe phase={room.phase} />
+        </>
     );
 }
 

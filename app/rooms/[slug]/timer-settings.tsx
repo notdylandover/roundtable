@@ -2,7 +2,6 @@
 
 import { Eye, Lock, Pause, Timer } from "lucide-react";
 import { useState } from "react";
-import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
@@ -15,10 +14,8 @@ import {
     type TimerSettings as TimerSettingsValue,
 } from "@/lib/protocol";
 import { cn } from "@/lib/utils";
+import { SETTINGS_LABEL as LABEL, SETTINGS_PRESSED as PRESSED, SettingsSection } from "./settings-section";
 import type { Send } from "./viewer";
-
-const PRESSED = "aria-pressed:bg-ink aria-pressed:text-white data-pressed:bg-ink data-pressed:text-white";
-const LABEL = "font-mono text-[11px] tracking-wider text-ink/70 uppercase";
 
 export function TimerSettings({ timer, send }: { timer: TimerSettingsValue; send: Send }) {
     const [draftSeconds, setDraftSeconds] = useState<number | null>(null);
@@ -30,29 +27,29 @@ export function TimerSettings({ timer, send }: { timer: TimerSettingsValue; send
     }
 
     return (
-        <Card className="gap-0 rounded-xl border-2 border-ink py-0 text-ink shadow-[4px_4px_0_var(--ink)] ring-0">
-            <CardHeader className="border-b-2 border-ink bg-paper py-4">
-                <CardTitle className="flex items-center gap-2 text-base font-bold">
-                    <Timer className="size-4" /> Clue timer
-                </CardTitle>
-                <CardDescription>Give players a countdown on every clue.</CardDescription>
-                <CardAction className="flex items-center gap-2 self-center">
+        <SettingsSection
+            icon={<Timer />}
+            title="Clue timer"
+            description="Give players a countdown on every clue."
+            action={
+                <>
                     <span className="font-mono text-[10px] font-semibold uppercase">{timer.enabled ? "On" : "Off"}</span>
                     <Switch
                         checked={timer.enabled}
                         onCheckedChange={(enabled) => update({ enabled })}
                         aria-label="Use a clue timer"
                     />
-                </CardAction>
-            </CardHeader>
-
-            <CardContent className={cn("flex flex-col gap-6 py-5 transition-opacity", !timer.enabled && "opacity-50")}>
+                </>
+            }
+        >
+            <div className={cn("flex flex-col gap-6 transition-opacity", !timer.enabled && "opacity-50")}>
                 <Field>
                     <div className="flex items-end justify-between">
                         <FieldLabel className={LABEL}>Time per clue</FieldLabel>
                         <span className="font-pixel-square text-3xl leading-none tabular-nums">{seconds}s</span>
                     </div>
                     <Slider
+                        data-base-ui-swipe-ignore=""
                         value={[seconds]}
                         min={TIMER_MIN_SECONDS}
                         max={TIMER_MAX_SECONDS}
@@ -115,7 +112,7 @@ export function TimerSettings({ timer, send }: { timer: TimerSettingsValue; send
                     The clock pauses while a player answers and resumes if they&apos;re wrong. New durations apply from
                     the next clue, or use Restart timer.
                 </p>
-            </CardContent>
-        </Card>
+            </div>
+        </SettingsSection>
     );
 }

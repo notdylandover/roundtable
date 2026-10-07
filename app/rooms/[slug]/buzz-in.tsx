@@ -1,19 +1,25 @@
 "use client";
 
-import { MotionConfig } from "framer-motion";
-import { Flag, House, Radio, RefreshCw, RotateCcw } from "lucide-react";
+import { AnimatePresence, MotionConfig, motion } from "framer-motion";
+import { Flag, Gamepad2, House, Pencil, Radio, RefreshCw, RotateCcw } from "lucide-react";
+import { useState, type ReactNode } from "react";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { UserAvatar } from "@/components/user-avatar";
-import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
+import {
+    DropdownMenu,
+    DropdownMenuContent,
+    DropdownMenuGroup,
+    DropdownMenuItem,
+    DropdownMenuLabel,
+    DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import type { ConnectionStatus } from "@/lib/party-client";
 import { getContestants, playerLabel, type GamePhase, type RoomState } from "@/lib/protocol";
 import { BoardEditor } from "./board-editor";
-import { FinalSettings } from "./final-settings";
-import { GameRules } from "./game-rules";
 import { PlayerActions } from "./player-actions";
+import { RoomTopBar, ToolbarButton, toolbarButtonClass } from "./room-toolbar";
 import { PickerChip, StageBody, stageShowsDeltas, stageShowsScores } from "./stage/game-stage";
 import { ScoreRail } from "./stage/scores";
-import { TimerSettings } from "./timer-settings";
 import type { Send, Viewer } from "./viewer";
 
 type BuzzInProps = {
@@ -21,6 +27,9 @@ type BuzzInProps = {
     viewer: Viewer;
     clockOffset: number;
     send: Send;
+    status: ConnectionStatus;
+    /** Shared room buttons (preview, invite, settings, leave, account) for the top bar. */
+    actions: ReactNode;
 };
 
 const PHASE_LABEL: Record<GamePhase, string> = {
@@ -30,83 +39,106 @@ const PHASE_LABEL: Record<GamePhase, string> = {
     finished: "Game over",
 };
 
-/** Owner/host controls for moving the game along, shown under the stage once the game has started. */
-function GameToolbar({ room, viewer, send }: Omit<BuzzInProps, "clockOffset">) {
+type GameAction = "reset_scores" | "reset_board" | "finish_board" | "new_game";
+
+/** Owner/host controls for moving the game along, tucked into a top-bar menu once the game has started. */
+function GameMenu({ room, viewer, send }: Pick<BuzzInProps, "room" | "viewer" | "send">) {
+    const [confirming, setConfirming] = useState<GameAction | null>(null);
     const playing = room.phase === "playing";
-    const canRestart = viewer.isGameMaster || viewer.isAdmin;
     const hasScores = getContestants(room).some((player) => player.score !== 0);
-    if (room.phase === "lobby" || (!viewer.isGameMaster && !canRestart)) return null;
+    const items = [
+        playing && viewer.isHost && hasScores && { action: "reset_scores" as const, label: "Reset scores", icon: RotateCcw },
+        playing && viewer.isHost && room.buzz.usedQuestionIds.length > 0 && { action: "reset_board" as const, label: "Reset board", icon: RefreshCw },
+        playing && viewer.isGameMaster && { action: "finish_board" as const, label: "End board now", icon: Flag, disabled: Boolean(room.buzz.activeQuestionId) },
+        (viewer.isGameMaster || viewer.isAdmin) && {
+            action: "new_game" as const,
+            label: room.phase === "finished" ? "New game" : "Back to lobby",
+            icon: House,
+        },
+    ].filter((item) => item !== false);
+    if (room.phase === "lobby" || items.length === 0) return null;
+
+    const confirmCopy: Record<GameAction, { title: string; description: string; confirmLabel: string; destructive?: boolean }> = {
+        reset_scores: {
+            title: "Reset every score to 0?",
+            description: "Clues stay where they are; only the scoreboard is cleared.",
+            confirmLabel: "Reset scores",
+        },
+        reset_board: {
+            title: "Put every clue back on the board?",
+            description: "Used clues become playable again. Scores are not changed.",
+            confirmLabel: "Reset board",
+        },
+        finish_board: {
+            title: "Skip the rest of the board?",
+            description: room.final.enabled
+                ? "Unplayed clues are skipped and the Final Buzz In starts right away."
+                : "Unplayed clues are skipped and everyone goes to the winner screen.",
+            confirmLabel: "End board",
+        },
+        new_game: {
+            title: room.phase === "finished" ? "Start a new game?" : "End this game and return to the lobby?",
+            description: "Scores reset to 0, every clue goes back on the board, and everyone returns to the lobby.",
+            confirmLabel: "Back to lobby",
+            destructive: room.phase !== "finished",
+        },
+    };
+    const copy = confirming ? confirmCopy[confirming] : null;
 
     return (
-        <Card className="flex-row flex-wrap items-center gap-2 rounded-xl border-2 border-ink px-4 py-3 text-ink shadow-[4px_4px_0_var(--ink)] ring-0">
-            <span className="mr-auto font-mono text-xs font-semibold uppercase">Game controls</span>
-            {playing && viewer.isHost && hasScores && (
+        <>
+            <DropdownMenu>
+                <DropdownMenuTrigger render={<button type="button" aria-label="Game controls" className={toolbarButtonClass("dark")} />}>
+                    <Gamepad2 />
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-52">
+                    <DropdownMenuGroup>
+                        <DropdownMenuLabel>Game controls</DropdownMenuLabel>
+                        {items.map((item) => (
+                            <DropdownMenuItem
+                                key={item.action}
+                                disabled={"disabled" in item && item.disabled}
+                                variant={item.action === "new_game" && room.phase !== "finished" ? "destructive" : "default"}
+                                onClick={() => setConfirming(item.action)}
+                            >
+                                <item.icon /> {item.label}
+                            </DropdownMenuItem>
+                        ))}
+                    </DropdownMenuGroup>
+                </DropdownMenuContent>
+            </DropdownMenu>
+            {copy && (
                 <ConfirmDialog
-                    trigger={
-                        <Button variant="outline" size="lg">
-                            <RotateCcw /> Reset scores
-                        </Button>
-                    }
-                    icon={<RotateCcw />}
-                    title="Reset every score to 0?"
-                    description="Clues stay where they are; only the scoreboard is cleared."
-                    confirmLabel="Reset scores"
-                    onConfirm={() => send({ type: "reset_scores" })}
+                    open
+                    onOpenChange={(open) => !open && setConfirming(null)}
+                    icon={<Gamepad2 />}
+                    destructive={copy.destructive}
+                    title={copy.title}
+                    description={copy.description}
+                    confirmLabel={copy.confirmLabel}
+                    onConfirm={() => {
+                        if (confirming) send({ type: confirming });
+                        setConfirming(null);
+                    }}
                 />
             )}
-            {playing && viewer.isHost && room.buzz.usedQuestionIds.length > 0 && (
-                <ConfirmDialog
-                    trigger={
-                        <Button variant="outline" size="lg">
-                            <RefreshCw /> Reset board
-                        </Button>
-                    }
-                    icon={<RefreshCw />}
-                    title="Put every clue back on the board?"
-                    description="Used clues become playable again. Scores are not changed."
-                    confirmLabel="Reset board"
-                    onConfirm={() => send({ type: "reset_board" })}
-                />
-            )}
-            {playing && viewer.isGameMaster && (
-                <ConfirmDialog
-                    trigger={
-                        <Button variant="outline" size="lg" disabled={Boolean(room.buzz.activeQuestionId)}>
-                            <Flag /> End board now
-                        </Button>
-                    }
-                    icon={<Flag />}
-                    title="Skip the rest of the board?"
-                    description={
-                        room.final.enabled
-                            ? "Unplayed clues are skipped and the Final Buzz In starts right away."
-                            : "Unplayed clues are skipped and everyone goes to the winner screen."
-                    }
-                    confirmLabel="End board"
-                    onConfirm={() => send({ type: "finish_board" })}
-                />
-            )}
-            {canRestart && (
-                <ConfirmDialog
-                    trigger={
-                        <Button variant="outline" size="lg">
-                            <House /> Back to lobby
-                        </Button>
-                    }
-                    icon={<House />}
-                    destructive={room.phase !== "finished"}
-                    title={room.phase === "finished" ? "Start a new game?" : "End this game and return to the lobby?"}
-                    description="Scores reset to 0, every clue goes back on the board, and everyone returns to the lobby."
-                    confirmLabel="Back to lobby"
-                    onConfirm={() => send({ type: "new_game" })}
-                />
-            )}
-        </Card>
+        </>
     );
 }
 
-export function BuzzIn({ room, viewer, clockOffset, send }: BuzzInProps) {
+/** The Buzz In room: a full-screen stage with a compact top bar. */
+export function BuzzIn({ room, viewer, clockOffset, send, status, actions }: BuzzInProps) {
+    const [editing, setEditing] = useState(false);
+    const [seen, setSeen] = useState({ phase: room.phase, clue: room.buzz.activeQuestionId });
+    // Drop out of edit mode when a clue opens or the phase changes so the owner/host doesn't miss it.
+    if (seen.phase !== room.phase || seen.clue !== room.buzz.activeQuestionId) {
+        setSeen({ phase: room.phase, clue: room.buzz.activeQuestionId });
+        if (seen.phase !== room.phase || room.buzz.activeQuestionId) setEditing(false);
+    }
+
     const host = room.players.find((player) => player.isHost);
+    const canEdit = viewer.isGameMaster && (room.phase === "lobby" || room.phase === "playing");
+    const showEditor = editing && canEdit;
     const renderActions = viewer.canConfigure
         ? (player: RoomState["players"][number]) => (
             <PlayerActions player={player} room={room} viewer={viewer} send={send} showTeams={false} />
@@ -114,50 +146,81 @@ export function BuzzIn({ room, viewer, clockOffset, send }: BuzzInProps) {
         : undefined;
 
     return (
-        <section className="flex flex-col gap-6 px-4 py-8 sm:px-8" aria-label="Buzz In game">
-            <MotionConfig reducedMotion="user">
-                <div className="dark @container relative overflow-hidden rounded-2xl border-2 border-ink bg-[#070b1f] text-white shadow-[6px_6px_0_var(--ink)]">
-                    <div
-                        aria-hidden="true"
-                        className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_top,rgba(27,49,196,0.45),transparent_60%),radial-gradient(ellipse_at_bottom_right,rgba(242,95,76,0.18),transparent_55%)]"
-                    />
-                    <div className="relative flex flex-wrap items-center justify-between gap-3 px-4 pt-4 @3xl:px-6">
-                        <div className="flex items-center gap-3">
-                            <span className="rounded-full border border-white/15 bg-white/5 px-3 py-1 font-mono text-[11px] tracking-[0.25em] text-white/60 uppercase">
-                                Buzz In · {PHASE_LABEL[room.phase]}
-                            </span>
-                            {host && room.phase !== "lobby" && (
-                                <span className="hidden items-center gap-2 text-xs text-white/60 @xl:flex">
-                                    <UserAvatar name={host.name} avatarUrl={host.avatarUrl} seed={host.userId} size="sm" />
-                                    Hosted by {playerLabel(host)} <Radio className="size-3.5 text-coral" />
+        <MotionConfig reducedMotion="user">
+            <div className="dark @container relative flex h-dvh flex-col overflow-hidden bg-[#070b1f] text-white [color-scheme:dark]">
+                <div
+                    aria-hidden="true"
+                    className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_top,rgba(27,49,196,0.45),transparent_60%),radial-gradient(ellipse_at_bottom_right,rgba(242,95,76,0.18),transparent_55%)]"
+                />
+
+                <RoomTopBar
+                    tone="dark"
+                    title={room.title}
+                    status={status}
+                    details={
+                        <>
+                            {(showEditor || room.phase !== "lobby") && (
+                                <span className="hidden shrink-0 rounded-full border border-white/15 bg-white/5 px-3 py-1 font-mono text-[10px] tracking-[0.25em] text-white/60 uppercase @xl:inline">
+                                    {showEditor ? "Editing board" : PHASE_LABEL[room.phase]}
                                 </span>
                             )}
-                        </div>
-                        <PickerChip room={room} viewerId={viewer.userId} />
-                    </div>
-
-                    <div className="relative h-[clamp(32rem,72dvh,52rem)] p-3 @3xl:px-6 @3xl:py-4" aria-live="polite">
-                        <StageBody room={room} clockOffset={clockOffset} viewer={viewer} send={send} renderActions={renderActions} />
-                    </div>
-
-                    {stageShowsScores(room) && (
-                        <div className="relative px-3 pb-4 @3xl:px-6 @3xl:pb-6">
-                            <ScoreRail room={room} showDeltas={stageShowsDeltas(room)} viewerId={viewer.userId} renderActions={renderActions} />
-                        </div>
+                            {host && room.phase !== "lobby" && (
+                                <span className="hidden min-w-0 items-center gap-2 text-xs text-white/60 @5xl:flex">
+                                    <UserAvatar name={host.name} avatarUrl={host.avatarUrl} seed={host.userId} size="sm" />
+                                    <span className="truncate">Hosted by {playerLabel(host)}</span>
+                                    <Radio className="size-3.5 shrink-0 text-coral" />
+                                </span>
+                            )}
+                        </>
+                    }
+                >
+                    {!showEditor && <PickerChip room={room} viewerId={viewer.userId} />}
+                    {canEdit && (
+                        <ToolbarButton
+                            tone="dark"
+                            label={showEditor ? "Done editing" : "Edit board"}
+                            icon={<Pencil />}
+                            active={showEditor}
+                            showLabel
+                            onClick={() => setEditing(!showEditor)}
+                        />
                     )}
-                </div>
-            </MotionConfig>
+                    <GameMenu room={room} viewer={viewer} send={send} />
+                    {actions}
+                </RoomTopBar>
 
-            <GameToolbar room={room} viewer={viewer} send={send} />
+                <main className="relative min-h-0 flex-1 px-3 pb-3 @3xl:px-6 @3xl:pb-4" aria-live="polite">
+                    <AnimatePresence mode="wait" initial={false}>
+                        <motion.div
+                            key={showEditor ? "editor" : "stage"}
+                            className="relative h-full"
+                            initial={{ opacity: 0, y: 12 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            exit={{ opacity: 0, y: -12 }}
+                            transition={{ duration: 0.25 }}
+                        >
+                            {showEditor ? (
+                                <BoardEditor room={room} send={send} />
+                            ) : (
+                                <StageBody
+                                    room={room}
+                                    clockOffset={clockOffset}
+                                    viewer={viewer}
+                                    send={send}
+                                    renderActions={renderActions}
+                                    onEditBoard={canEdit ? () => setEditing(true) : undefined}
+                                />
+                            )}
+                        </motion.div>
+                    </AnimatePresence>
+                </main>
 
-            {viewer.isGameMaster && <BoardEditor room={room} send={send} />}
-            {viewer.isGameMaster && (
-                <div className="grid items-start gap-6 lg:grid-cols-2">
-                    <GameRules room={room} send={send} />
-                    <FinalSettings final={room.final} send={send} />
-                    {viewer.isHost && <TimerSettings timer={room.timer} send={send} />}
-                </div>
-            )}
-        </section>
+                {stageShowsScores(room) && !showEditor && (
+                    <footer className="relative px-3 pb-3 @3xl:px-6 @3xl:pb-5">
+                        <ScoreRail room={room} showDeltas={stageShowsDeltas(room)} viewerId={viewer.userId} renderActions={renderActions} />
+                    </footer>
+                )}
+            </div>
+        </MotionConfig>
     );
 }

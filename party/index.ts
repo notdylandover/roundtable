@@ -6,6 +6,7 @@ import {
     type ConnectionContext,
 } from "partyserver";
 import { isAdminUser } from "../lib/auth/admins";
+import { DEFAULT_ANSWER_LENIENCY, isAnswerLeniency, type AnswerLeniency } from "../lib/answer-match";
 import { signToken, toSessionUser, verifyToken } from "../lib/auth/token";
 import type { AuthProvider, SessionUser } from "../lib/auth/types";
 import { collapseWhitespace, containsBlockedWord, validateDisplayName } from "../lib/names";
@@ -91,6 +92,7 @@ type StoredRoomSettings = {
     timerExpiryAction: TimerExpiryAction;
     answerMode: AnswerMode;
     pickMode: PickMode;
+    answerLeniency: AnswerLeniency;
     pickerUserId: string | null;
     board: BoardCategoryData[];
     buzz: BuzzState;
@@ -718,6 +720,9 @@ export class Server extends PartyServer<Env> {
                 if (message.pickMode === "host" || message.pickMode === "player") {
                     settings.pickMode = message.pickMode;
                 }
+                if (isAnswerLeniency(message.leniency)) {
+                    settings.answerLeniency = message.leniency;
+                }
                 await this.saveAndBroadcast(settings);
                 return;
             }
@@ -1031,6 +1036,7 @@ export class Server extends PartyServer<Env> {
             timerExpiryAction: "reveal",
             answerMode: "spoken",
             pickMode: "host",
+            answerLeniency: DEFAULT_ANSWER_LENIENCY,
             pickerUserId: null,
             board: createBlankBoard(),
             buzz: createEmptyBuzz(),
@@ -1269,7 +1275,7 @@ export class Server extends PartyServer<Env> {
                 seconds: settings.timerSeconds,
                 expiryAction: settings.timerExpiryAction,
             },
-            rules: { answerMode: settings.answerMode, pickMode: settings.pickMode },
+            rules: { answerMode: settings.answerMode, pickMode: settings.pickMode, leniency: settings.answerLeniency },
             pickerUserId: settings.pickerUserId,
             players: this.collectPlayers(settings),
             board: settings.board.map((category) => ({

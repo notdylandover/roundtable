@@ -5,9 +5,11 @@ import { CheckCircle2, Eye, Lock, SendHorizontal, SkipForward, TimerOff, TimerRe
 import { useEffect, useState, type FormEvent } from "react";
 import { UserAvatar } from "@/components/user-avatar";
 import { Kbd } from "@/components/ui/kbd";
+import { assessAnswer } from "@/lib/answer-match";
 import { playerLabel, type ActiveClue, type RoomState } from "@/lib/protocol";
 import { cn } from "@/lib/utils";
 import type { Send, Viewer } from "../viewer";
+import { MatchHint, suggestedRing } from "./match-hint";
 import { StageButton } from "./primitives";
 
 function TypedAnswerForm({ send }: { send: Send }) {
@@ -53,7 +55,7 @@ function TypedAnswerForm({ send }: { send: Send }) {
     );
 }
 
-function AttemptsList({ room }: { room: RoomState }) {
+function AttemptsList({ room, answer }: { room: RoomState; answer: string }) {
     return (
         <div className="w-full max-w-xl rounded-xl border-2 border-white/15 bg-black/25 p-3 text-left">
             <p className="mb-2 font-mono text-[10px] font-semibold tracking-widest text-white/50 uppercase">
@@ -79,6 +81,9 @@ function AttemptsList({ room }: { room: RoomState }) {
                             <span className={cn("min-w-0 flex-1 truncate font-bold", attempt.result === "incorrect" && "line-through")}>
                                 {attempt.text}
                             </span>
+                            {attempt.result === "pending" && (
+                                <MatchHint compact assessment={assessAnswer(attempt.text, answer, room.rules.leniency)} />
+                            )}
                             <span className="font-mono text-[10px] text-white/50 uppercase">
                                 {attempt.result === "pending" ? "Needs judging" : attempt.result}
                             </span>
@@ -101,6 +106,7 @@ export function ClueControls({ room, viewer, send, question }: { room: RoomState
     const canBuzz =
         !viewer.isGameMaster && Boolean(me) && !buzz.buzzedUserId && !buzz.answerRevealed && !buzz.timerExpired && !excluded;
     const iBuzzed = buzzedPlayer?.userId === viewer.userId && !buzz.answerRevealed;
+    const suggestion = viewer.isHost && pendingAttempt ? assessAnswer(pendingAttempt.text, question.answer, room.rules.leniency) : null;
 
     useEffect(() => {
         if (!canBuzz) return;
@@ -166,7 +172,7 @@ export function ClueControls({ room, viewer, send, question }: { room: RoomState
                 <span className="text-xs text-white/50">{playerLabel(buzzedPlayer)} is guessing...</span>
             )}
 
-            {viewer.isGameMaster && typed && buzz.attempts.length > 0 && <AttemptsList room={room} />}
+            {viewer.isGameMaster && typed && buzz.attempts.length > 0 && <AttemptsList room={room} answer={question.answer} />}
 
             {viewer.isGameMaster && !viewer.isHost && !buzz.answerRevealed && (
                 <span className="text-xs text-white/50">The host runs the clue.</span>
@@ -181,10 +187,23 @@ export function ClueControls({ room, viewer, send, question }: { room: RoomState
                     )}
                     {buzzedPlayer && !buzz.answerRevealed && (
                         <>
-                            <StageButton tone="green" onClick={() => send({ type: "judge_buzz", correct: true })}>
+                            {suggestion && (
+                                <div className="flex w-full justify-center">
+                                    <MatchHint assessment={suggestion} />
+                                </div>
+                            )}
+                            <StageButton
+                                tone="green"
+                                className={suggestedRing(suggestion, "correct")}
+                                onClick={() => send({ type: "judge_buzz", correct: true })}
+                            >
                                 <CheckCircle2 /> Correct (+{question.value})
                             </StageButton>
-                            <StageButton tone="coral" onClick={() => send({ type: "judge_buzz", correct: false })}>
+                            <StageButton
+                                tone="coral"
+                                className={suggestedRing(suggestion, "incorrect")}
+                                onClick={() => send({ type: "judge_buzz", correct: false })}
+                            >
                                 <XCircle /> Incorrect (−{question.value})
                             </StageButton>
                         </>

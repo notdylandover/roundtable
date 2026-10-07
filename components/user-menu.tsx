@@ -107,7 +107,8 @@ function RenameDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (op
     );
 }
 
-export function UserMenu() {
+/** `compact` shows just the avatar, for the in-room top bar. */
+export function UserMenu({ compact = false }: { compact?: boolean }) {
     const { session } = useSession();
     const [renameOpen, setRenameOpen] = useState(false);
     const [signingOut, setSigningOut] = useState(false);
@@ -124,26 +125,41 @@ export function UserMenu() {
     return (
         <>
             <DropdownMenu>
-                <DropdownMenuTrigger
-                    render={
-                        <Button
-                            variant="outline"
-                            className="h-10 gap-2 rounded-full border-2 border-ink bg-white pr-3 pl-1 hover:bg-paper"
-                        />
-                    }
-                >
-                    <UserAvatar name={user.name} avatarUrl={user.avatarUrl} seed={user.id} />
-                    <span className="max-w-28 truncate font-mono text-xs font-semibold sm:max-w-40">{user.name}</span>
-                    {isAdmin && (
-                        <Badge className="hidden bg-violet-600 text-white sm:inline-flex">
-                            <ShieldCheck /> Admin
-                        </Badge>
-                    )}
-                    <ChevronDown className="text-muted-foreground" />
-                </DropdownMenuTrigger>
+                {compact ? (
+                    <DropdownMenuTrigger
+                        render={
+                            <button
+                                type="button"
+                                aria-label={`Account: ${user.name}`}
+                                className="flex size-9 shrink-0 items-center justify-center rounded-full outline-none focus-visible:ring-3 focus-visible:ring-aqua"
+                            />
+                        }
+                    >
+                        <UserAvatar name={user.name} avatarUrl={user.avatarUrl} seed={user.id} className="size-9 ring-2 ring-white/20" />
+                    </DropdownMenuTrigger>
+                ) : (
+                    <DropdownMenuTrigger
+                        render={
+                            <Button
+                                variant="outline"
+                                className="h-10 gap-2 rounded-full border-2 border-ink bg-white pr-3 pl-1 hover:bg-paper"
+                            />
+                        }
+                    >
+                        <UserAvatar name={user.name} avatarUrl={user.avatarUrl} seed={user.id} />
+                        <span className="max-w-28 truncate font-mono text-xs font-semibold sm:max-w-40">{user.name}</span>
+                        {isAdmin && (
+                            <Badge className="hidden bg-violet-600 text-white sm:inline-flex">
+                                <ShieldCheck /> Admin
+                            </Badge>
+                        )}
+                        <ChevronDown className="text-muted-foreground" />
+                    </DropdownMenuTrigger>
+                )}
                 <DropdownMenuContent align="end" className="w-60">
                     <DropdownMenuGroup>
                         <DropdownMenuLabel>
+                            {compact && <span className="block truncate font-semibold text-foreground">{user.name}</span>}
                             Signed in {user.provider === "discord" ? "with Discord" : "as a guest"}
                             {isAdmin && " · Admin"}
                         </DropdownMenuLabel>

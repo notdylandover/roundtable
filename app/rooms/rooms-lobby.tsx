@@ -5,7 +5,7 @@ import { ArrowUpRight, CirclePlus, Search, ShieldCheck, Trash2, Users, Zap } fro
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import type PartySocket from "partysocket";
-import { startTransition, useDeferredValue, useEffect, useRef, useState, type FormEvent } from "react";
+import { useDeferredValue, useEffect, useRef, useState, type FormEvent, type MouseEvent } from "react";
 import { AppHeader } from "@/components/app-header";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { useSession } from "@/components/session-provider";
@@ -24,18 +24,33 @@ import { createRoomSlug } from "@/lib/names";
 import { createPartySocket, parseServerMessage, type ConnectionStatus } from "@/lib/party-client";
 import type { ClientMessage, RoomSummary } from "@/lib/protocol";
 import { cn } from "@/lib/utils";
+import { useRoomSession, type RoomOrigin } from "./room-session";
 
-const CARD_TONES = ["bg-white", "bg-[#fff5d2]", "bg-[#dcf3f5]"];
+const CARD_TONES = ["#ffffff", "#fff5d2", "#dcf3f5"];
+const CREATE_TONE = "#f25f4c";
 
 type RoomCardProps = {
     room: RoomSummary;
     index: number;
     isAdmin: boolean;
+    joined: boolean;
     onDelete: (slug: string) => void;
+    onOpen: (slug: string, origin: RoomOrigin) => void;
 };
 
-function RoomCard({ room, index, isAdmin, onDelete }: RoomCardProps) {
+function RoomCard({ room, index, isAdmin, joined, onDelete, onOpen }: RoomCardProps) {
     const live = room.playerCount > 0;
+    const tone = CARD_TONES[index % CARD_TONES.length];
+    const cardRef = useRef<HTMLDivElement>(null);
+
+    function open(event: MouseEvent<HTMLAnchorElement>) {
+        // Let new-tab and other modified clicks behave like normal links.
+        if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+        const rect = cardRef.current?.getBoundingClientRect();
+        if (!rect) return;
+        event.preventDefault();
+        onOpen(room.slug, { rect, tone, title: room.title });
+    }
 
     return (
         <motion.li
@@ -46,14 +61,16 @@ function RoomCard({ room, index, isAdmin, onDelete }: RoomCardProps) {
             transition={{ duration: 0.3, delay: Math.min(index, 8) * 0.04 }}
         >
             <Card
+                ref={cardRef}
+                style={{ backgroundColor: tone }}
                 className={cn(
                     "group relative h-full min-h-56 justify-between gap-6 rounded-xl border-2 border-ink p-5 text-ink shadow-[4px_4px_0_var(--ink)] ring-0 transition-[translate,box-shadow] duration-150 has-[a:focus-visible]:ring-3 has-[a:focus-visible]:ring-aqua hover:-translate-x-0.5 hover:-translate-y-0.5 hover:shadow-[7px_7px_0_var(--ink)]",
-                    CARD_TONES[index % CARD_TONES.length]
+                    joined && "ring-3 ring-pine/60"
                 )}
             >
                 <div className="flex items-center gap-2 font-mono text-[10px] font-semibold uppercase">
                     <span className={cn("size-2 rounded-full", live ? "bg-pine ring-3 ring-pine/20" : "bg-line")} />
-                    {live ? "In session" : "Waiting"}
+                    {joined ? "You're here" : live ? "In session" : "Waiting"}
                     <Badge variant="outline" className="ml-auto border-ink/25 bg-white/70 text-ink">
                         {room.gameMode === "buzz_in" ? <Zap /> : <Users />}
                         {room.gameMode === "buzz_in" ? "Buzz In" : "Teams"}
@@ -62,7 +79,7 @@ function RoomCard({ room, index, isAdmin, onDelete }: RoomCardProps) {
 
                 <div className="min-w-0">
                     <h3 className="text-2xl leading-tight font-bold break-words">
-                        <Link href={`/rooms/${room.slug}`} className="outline-none after:absolute after:inset-0">
+                        <Link href={`/rooms/${room.slug}`} onClick={open} className="outline-none after:absolute after:inset-0">
                             {room.title}
                         </Link>
                     </h3>
@@ -111,9 +128,12 @@ function RoomCard({ room, index, isAdmin, onDelete }: RoomCardProps) {
 export function RoomsLobby() {
     const router = useRouter();
     const { session } = useSession();
+    const { slug: joinedSlug, room: joinedRoom, enterRoom } = useRoomSession();
     const isAdmin = session?.isAdmin === true;
     const socketRef = useRef<PartySocket | null>(null);
     const creatingRef = useRef(false);
+    const createButtonRef = useRef<HTMLButtonElement>(null);
+    const enterRoomRef = useRef(enterRoom);
     const [rooms, setRooms] = useState<RoomSummary[] | null>(null);
     const [status, setStatus] = useState<ConnectionStatus>("connecting");
     const [query, setQuery] = useState("");
@@ -121,6 +141,10 @@ export function RoomsLobby() {
     const [creating, setCreating] = useState(false);
     const [formError, setFormError] = useState<string | null>(null);
     const deferredQuery = useDeferredValue(query.trim().toLowerCase());
+
+    useEffect(() => {
+        enterRoomRef.current = enterRoom;
+    }, [enterRoom]);
 
     useEffect(() => {
         const socket = createPartySocket({ room: "lobby" });
@@ -137,7 +161,11 @@ export function RoomsLobby() {
             if (!message) return;
             if (message.type === "lobby_state") setRooms(message.rooms);
             if (message.type === "room_created") {
-                startTransition(() => router.push(`/rooms/${message.room.slug}`));
+                const rect = createButtonRef.current?.getBoundingClientRect();
+                enterRoomRef.current(
+                    message.room.slug,
+                    rect ? { rect, tone: CREATE_TONE, title: message.room.title } : undefined
+                );
             }
             if (message.type === "notice") toast.add({ title: message.message, type: "success" });
             if (message.type === "error") {
@@ -240,6 +268,7 @@ export function RoomsLobby() {
                                 className="h-12 border-2 border-ink bg-cream px-3 text-sm md:text-sm"
                             />
                             <Button
+                                ref={createButtonRef}
                                 type="submit"
                                 disabled={creating}
                                 className="h-12 border-2 border-ink px-5 text-sm shadow-[3px_3px_0_var(--ink)]"
@@ -271,7 +300,7 @@ export function RoomsLobby() {
                 </Field>
             </section>
 
-            <section className="flex-1 px-4 pt-10 pb-20 sm:px-8">
+            <section className={cn("flex-1 px-4 pt-10 sm:px-8", joinedSlug && joinedRoom ? "pb-40" : "pb-20")}>
                 {rooms === null ? (
                     <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
                         {[0, 1, 2].map((index) => (
@@ -287,7 +316,9 @@ export function RoomsLobby() {
                                     room={room}
                                     index={index}
                                     isAdmin={isAdmin}
+                                    joined={room.slug === joinedSlug && joinedRoom !== null}
                                     onDelete={(slug) => send({ type: "delete_room", slug })}
+                                    onOpen={enterRoom}
                                 />
                             ))}
                         </AnimatePresence>

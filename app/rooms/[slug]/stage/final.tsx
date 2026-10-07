@@ -5,9 +5,11 @@ import { Check, Gavel, KeyRound, Lock, SendHorizontal, Sparkles, Trophy, X } fro
 import { useState, type FormEvent } from "react";
 import { UserAvatar } from "@/components/user-avatar";
 import { useCountdown } from "@/hooks/use-countdown";
+import { assessAnswer, type AnswerAssessment } from "@/lib/answer-match";
 import { getContestants, playerLabel, type FinalEntry, type FinalRound, type RoomPlayer, type RoomState } from "@/lib/protocol";
 import { cn } from "@/lib/utils";
 import type { Send, Viewer } from "../viewer";
+import { MatchHint } from "./match-hint";
 import { AnimatedPrompt, LoadingDots, StageButton, StageTimer } from "./primitives";
 
 type FinalStageProps = {
@@ -125,11 +127,13 @@ function FinalAnswerForm({ maxWager, round, clockOffset, send }: { maxWager: num
     );
 }
 
-function EntryRow({ player, entry, index, mode, send }: {
+function EntryRow({ player, entry, index, mode, suggestion, send }: {
     player: RoomPlayer;
     entry: FinalEntry | undefined;
     index: number;
     mode: "live" | "judge" | "reveal";
+    /** Judging suggestion, only computed for the owner/host. */
+    suggestion?: AnswerAssessment | null;
     send?: Send;
 }) {
     const reveal = mode === "reveal";
@@ -156,6 +160,7 @@ function EntryRow({ player, entry, index, mode, send }: {
                 <div className={cn("truncate text-lg font-bold", !entry && "text-white/40 italic")}>
                     {entry ? entry.answer || "—" : mode === "live" ? "Thinking…" : "No answer"}
                 </div>
+                {mode === "judge" && suggestion && <MatchHint assessment={suggestion} className="mt-1" />}
             </div>
             {entry && entry.wager !== null && (
                 <span className="shrink-0 font-mono text-xs text-white/60">
@@ -326,16 +331,24 @@ export function FinalStage({ room, clockOffset, viewer, send }: FinalStageProps)
 
             {(isGameMaster || round.stage === "revealed") && rows.length > 0 && (
                 <ul className="flex w-full max-w-2xl flex-col gap-2">
-                    {rows.map((player, index) => (
-                        <EntryRow
-                            key={player.userId}
-                            player={player}
-                            entry={entryFor(player.userId)}
-                            index={index}
-                            mode={round.stage === "revealed" ? "reveal" : round.stage === "judging" ? "judge" : "live"}
-                            send={send}
-                        />
-                    ))}
+                    {rows.map((player, index) => {
+                        const entry = entryFor(player.userId);
+                        return (
+                            <EntryRow
+                                key={player.userId}
+                                player={player}
+                                entry={entry}
+                                index={index}
+                                mode={round.stage === "revealed" ? "reveal" : round.stage === "judging" ? "judge" : "live"}
+                                suggestion={
+                                    isGameMaster && round.stage === "judging" && entry
+                                        ? assessAnswer(entry.answer, round.answer, room.rules.leniency)
+                                        : null
+                                }
+                                send={send}
+                            />
+                        );
+                    })}
                 </ul>
             )}
 

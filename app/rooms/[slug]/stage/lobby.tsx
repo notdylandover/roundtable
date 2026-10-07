@@ -1,7 +1,7 @@
 "use client";
 
 import { AnimatePresence, motion } from "framer-motion";
-import { Check, Crown, LayoutGrid, Play, Radio, Sparkles, Undo2, Users } from "lucide-react";
+import { Check, Crown, LayoutGrid, Pencil, Play, Radio, Sparkles, Undo2, Users } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { UserAvatar } from "@/components/user-avatar";
@@ -17,9 +17,11 @@ type LobbyStageProps = {
     /** Shown on the big screen so people can join from their phones. */
     joinUrl?: string;
     renderActions?: (player: RoomPlayer) => ReactNode;
+    /** Owner/host only: opens the board editor. */
+    onEditBoard?: () => void;
 };
 
-export function LobbyStage({ room, viewer, send, joinUrl, renderActions }: LobbyStageProps) {
+export function LobbyStage({ room, viewer, send, joinUrl, renderActions, onEditBoard }: LobbyStageProps) {
     const [confirmStart, setConfirmStart] = useState(false);
     const contestants = getContestants(room);
     const hosts = room.players.filter((player) => player.isHost || player.isOwner);
@@ -195,14 +197,21 @@ export function LobbyStage({ room, viewer, send, joinUrl, renderActions }: Lobby
 
             {canStart && (
                 <div className="flex flex-col items-center gap-2">
-                    <StageButton
-                        tone={allReady ? "green" : "mustard"}
-                        className="h-14 px-8 text-lg"
-                        disabled={!progress.full || contestants.length === 0}
-                        onClick={start}
-                    >
-                        <Play /> Start game
-                    </StageButton>
+                    <div className="flex flex-wrap justify-center gap-2">
+                        {onEditBoard && (
+                            <StageButton tone={progress.full ? "ghost" : "mustard"} className="h-14 px-6 text-lg" onClick={onEditBoard}>
+                                <Pencil /> {progress.full ? "Edit board" : "Fill the board"}
+                            </StageButton>
+                        )}
+                        <StageButton
+                            tone={allReady ? "green" : "mustard"}
+                            className="h-14 px-8 text-lg"
+                            disabled={!progress.full || contestants.length === 0}
+                            onClick={start}
+                        >
+                            <Play /> Start game
+                        </StageButton>
+                    </div>
                     <span className="text-xs text-white/50">
                         {!progress.full
                             ? `Fill every clue to start (${progress.filled}/${progress.total}).`

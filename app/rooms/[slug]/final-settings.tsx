@@ -4,7 +4,6 @@ import { Check, PencilLine, Shuffle, Sparkles } from "lucide-react";
 import { useState, type FormEvent } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Slider } from "@/components/ui/slider";
@@ -20,10 +19,8 @@ import {
     type FinalSource,
 } from "@/lib/protocol";
 import { cn } from "@/lib/utils";
+import { SETTINGS_LABEL as LABEL, SETTINGS_PRESSED as PRESSED, SettingsSection } from "./settings-section";
 import type { Send } from "./viewer";
-
-const PRESSED = "aria-pressed:bg-ink aria-pressed:text-white data-pressed:bg-ink data-pressed:text-white";
-const LABEL = "font-mono text-[11px] tracking-wider text-ink/70 uppercase";
 
 function CustomQuestionForm({ final, send }: { final: FinalSettingsValue; send: Send }) {
     const [category, setCategory] = useState(final.category);
@@ -94,31 +91,29 @@ export function FinalSettings({ final, send }: { final: FinalSettingsValue; send
     const customReady = isCustomFinalReady(final);
 
     return (
-        <Card className="gap-0 rounded-xl border-2 border-ink py-0 text-ink shadow-[4px_4px_0_var(--ink)] ring-0">
-            <CardHeader className="border-b-2 border-ink bg-paper py-4">
-                <CardTitle className="flex items-center gap-2 text-base font-bold">
-                    <Sparkles className="size-4" /> Final Buzz In
-                </CardTitle>
-                <CardDescription>
-                    After the last clue, everyone wagers up to their score and types an answer to one final question.
-                </CardDescription>
-                <CardAction className="flex items-center gap-2 self-center">
+        <SettingsSection
+            icon={<Sparkles />}
+            title="Final Buzz In"
+            description="After the last clue, everyone wagers up to their score and types an answer to one final question."
+            action={
+                <>
                     <span className="font-mono text-[10px] font-semibold uppercase">{final.enabled ? "On" : "Off"}</span>
                     <Switch
                         checked={final.enabled}
                         onCheckedChange={(enabled) => send({ type: "update_final", enabled })}
                         aria-label="Play a Final Buzz In"
                     />
-                </CardAction>
-            </CardHeader>
-
-            <CardContent className={cn("flex flex-col gap-6 py-5 transition-opacity", !final.enabled && "opacity-50")}>
+                </>
+            }
+        >
+            <div className={cn("flex flex-col gap-6 transition-opacity", !final.enabled && "opacity-50")}>
                 <Field>
                     <div className="flex items-end justify-between">
                         <FieldLabel className={LABEL}>Time to answer</FieldLabel>
                         <span className="font-pixel-square text-3xl leading-none tabular-nums">{seconds}s</span>
                     </div>
                     <Slider
+                        data-base-ui-swipe-ignore=""
                         value={[seconds]}
                         min={FINAL_MIN_SECONDS}
                         max={FINAL_MAX_SECONDS}
@@ -189,7 +184,7 @@ export function FinalSettings({ final, send }: { final: FinalSettingsValue; send
                 {final.source === "custom" && (
                     <CustomQuestionForm key={`${final.category}|${final.prompt}|${final.answer}`} final={final} send={send} />
                 )}
-            </CardContent>
-        </Card>
+            </div>
+        </SettingsSection>
     );
 }

@@ -1,27 +1,24 @@
 "use client";
 
-import { ArrowLeft, Check, Copy, DoorOpen, MonitorPlay, Radio, Trash2, UserX, Users, WifiOff, Zap } from "lucide-react";
+import { ArrowLeft, Check, DoorOpen, Link2, LogOut, MonitorPlay, Settings2, Trash2, UserX, Users } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import type PartySocket from "partysocket";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { AppHeader } from "@/components/app-header";
 import { useSession } from "@/components/session-provider";
-import { Badge } from "@/components/ui/badge";
-import { Button, buttonVariants } from "@/components/ui/button";
+import { UserMenu } from "@/components/user-menu";
+import { buttonVariants } from "@/components/ui/button";
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
 import { Separator } from "@/components/ui/separator";
 import { Spinner } from "@/components/ui/spinner";
-import { toast } from "@/components/ui/toast";
-import { createPartySocket, parseServerMessage, type ConnectionStatus } from "@/lib/party-client";
-import type { ClientMessage, RoomState } from "@/lib/protocol";
+import type { RoomState } from "@/lib/protocol";
 import { cn } from "@/lib/utils";
+import { useRoomSession, type GoneReason } from "../room-session";
 import { BuzzIn } from "./buzz-in";
-import { OwnerControls } from "./owner-controls";
+import { RoomSettings, hasRoomSettings } from "./room-settings";
+import { RoomTopBar, ToolbarButton, type ToolbarTone } from "./room-toolbar";
 import { TeamsBoard } from "./teams-board";
-import { getViewer } from "./viewer";
-
-type GoneReason = "missing" | "deleted" | "removed";
+import { getViewer, type Viewer } from "./viewer";
 
 const GONE_COPY: Record<GoneReason, { title: string; description: string; icon: typeof DoorOpen }> = {
     missing: {
@@ -45,7 +42,7 @@ function GoneScreen({ reason }: { reason: GoneReason }) {
     const copy = GONE_COPY[reason];
     const Icon = copy.icon;
     return (
-        <Empty className="mx-4 my-16 min-h-80 border-2 border-dashed border-ink/25 bg-white/60 sm:mx-8">
+        <Empty className="mx-4 my-16 min-h-80 w-auto border-2 border-dashed border-ink/25 bg-white/60 sm:mx-8">
             <EmptyHeader>
                 <EmptyMedia variant="icon" className="size-12 rounded-full border-2 border-ink bg-white">
                     <Icon className="size-5" />
@@ -62,146 +59,93 @@ function GoneScreen({ reason }: { reason: GoneReason }) {
     );
 }
 
-export function RoomClient({ slug }: { slug: string }) {
-    const router = useRouter();
-    const { session } = useSession();
-    const userId = session?.user.id ?? null;
-    const userName = session?.user.name;
-    const isAdmin = session?.isAdmin === true;
-    const socketRef = useRef<PartySocket | null>(null);
-    const presenceRef = useRef<PartySocket | null>(null);
-    const deletingRef = useRef(false);
-    const lastNameRef = useRef(userName);
-    const [room, setRoom] = useState<RoomState | null>(null);
-    const [clockOffset, setClockOffset] = useState(0);
-    const [status, setStatus] = useState<ConnectionStatus>("connecting");
-    const [gone, setGone] = useState<GoneReason | null>(null);
+type RoomActionsProps = {
+    tone: ToolbarTone;
+    room: RoomState;
+    viewer: Viewer;
+    settingsOpen: boolean;
+    onOpenSettings: () => void;
+    onLeave: () => void;
+};
+
+/** Preview, invite, settings, leave, and account buttons for the right side of the top bar. */
+function RoomActions({ tone, room, viewer, settingsOpen, onOpenSettings, onLeave }: RoomActionsProps) {
     const [copied, setCopied] = useState(false);
 
-    useEffect(() => {
-        const roomSocket = createPartySocket({ room: slug });
-        // A lobby connection tagged with this room keeps the lobby's player counts accurate.
-        const presenceSocket = createPartySocket({ room: "lobby", query: { room: slug } });
-        socketRef.current = roomSocket;
-        presenceRef.current = presenceSocket;
-
-        const closeAll = () => {
-            roomSocket.close();
-            presenceSocket.close();
-        };
-        const leave = (reason: GoneReason) => {
-            closeAll();
-            setGone(reason);
-        };
-        const signIn = () => {
-            closeAll();
-            router.replace(`/?next=${encodeURIComponent(`/rooms/${slug}`)}`);
-        };
-
-        const onRoomMessage = (event: MessageEvent) => {
-            const message = parseServerMessage(event.data);
-            if (!message) return;
-            switch (message.type) {
-                case "room_state":
-                    setRoom(message.room);
-                    setClockOffset(message.serverTime - Date.now());
-                    break;
-                case "error":
-                    toast.add({ title: message.message, type: "error" });
-                    break;
-                case "notice":
-                    toast.add({ title: message.message, type: "success" });
-                    break;
-                case "auth_required":
-                    signIn();
-                    break;
-                case "room_missing":
-                    leave("missing");
-                    break;
-                case "room_deleted":
-                    if (deletingRef.current) {
-                        closeAll();
-                        router.replace("/rooms");
-                    } else {
-                        leave("deleted");
-                    }
-                    break;
-                case "removed":
-                    leave("removed");
-                    break;
-            }
-        };
-        const onPresenceMessage = (event: MessageEvent) => {
-            const message = parseServerMessage(event.data);
-            if (message?.type === "notice") toast.add({ title: message.message, type: "success" });
-            if (message?.type === "error") toast.add({ title: message.message, type: "error" });
-            if (message?.type === "auth_required") signIn();
-        };
-        const onOpen = () => setStatus("live");
-        const onClose = () => setStatus("offline");
-
-        roomSocket.addEventListener("open", onOpen);
-        roomSocket.addEventListener("close", onClose);
-        roomSocket.addEventListener("message", onRoomMessage);
-        presenceSocket.addEventListener("message", onPresenceMessage);
-        return () => {
-            socketRef.current = null;
-            presenceRef.current = null;
-            closeAll();
-        };
-    }, [router, slug]);
-
-    // Guests can rename themselves mid-game; push the new name to the room.
-    useEffect(() => {
-        if (!userName || userName === lastNameRef.current) return;
-        lastNameRef.current = userName;
-        if (socketRef.current?.readyState === WebSocket.OPEN) {
-            socketRef.current.send(JSON.stringify({ type: "set_name", name: userName } satisfies ClientMessage));
-        }
-    }, [userName]);
-
-    const send = useCallback((message: ClientMessage) => {
-        if (socketRef.current?.readyState !== WebSocket.OPEN) {
-            toast.add({ title: "Reconnecting to the room. Try again in a moment.", type: "error" });
-            return;
-        }
-        socketRef.current.send(JSON.stringify(message));
-    }, []);
-
-    function deleteRoom() {
-        if (presenceRef.current?.readyState !== WebSocket.OPEN) {
-            toast.add({ title: "Reconnecting to the lobby. Try again in a moment.", type: "error" });
-            return;
-        }
-        deletingRef.current = true;
-        presenceRef.current.send(JSON.stringify({ type: "delete_room", slug } satisfies ClientMessage));
-    }
-
     async function copyInvite() {
-        await navigator.clipboard.writeText(`${window.location.origin}/rooms/${slug}`);
+        await navigator.clipboard.writeText(`${window.location.origin}/rooms/${room.slug}`);
         setCopied(true);
         window.setTimeout(() => setCopied(false), 1800);
     }
 
-    const header = (
-        <AppHeader
-            status={gone ? undefined : status}
-            leading={
-                <>
-                    <Link href="/rooms" className={cn(buttonVariants({ variant: "ghost", size: "lg" }), "h-10 gap-1.5 text-sm")}>
-                        <ArrowLeft /> Rooms
-                    </Link>
-                    <Separator orientation="vertical" className="h-6 bg-ink/20" />
-                    <span className="truncate font-mono text-[11px] font-semibold text-ink/60 uppercase">Room / {slug}</span>
-                </>
-            }
-        />
+    return (
+        <>
+            {room.gameMode === "buzz_in" && (
+                <ToolbarButton
+                    tone={tone}
+                    label="Open big-screen preview"
+                    icon={<MonitorPlay />}
+                    href={`/rooms/${room.slug}/preview`}
+                    external
+                    className="hidden @2xl:flex"
+                />
+            )}
+            <ToolbarButton
+                tone={tone}
+                label={copied ? "Invite link copied" : "Copy invite link"}
+                icon={copied ? <Check /> : <Link2 />}
+                active={copied}
+                onClick={copyInvite}
+            />
+            {hasRoomSettings(room, viewer) && (
+                <ToolbarButton tone={tone} label="Room settings" icon={<Settings2 />} active={settingsOpen} onClick={onOpenSettings} />
+            )}
+            <ToolbarButton tone={tone} label="Leave room" icon={<LogOut />} danger onClick={onLeave} />
+            <span className={cn("mx-0.5 hidden h-6 w-px @2xl:block", tone === "dark" ? "bg-white/15" : "bg-ink/20")} aria-hidden="true" />
+            <UserMenu compact />
+        </>
     );
+}
+
+export function RoomClient({ slug }: { slug: string }) {
+    const router = useRouter();
+    const { session } = useSession();
+    const userId = session?.user.id ?? null;
+    const isAdmin = session?.isAdmin === true;
+    const roomSession = useRoomSession();
+    const { join, leave, send, deleteRoom } = roomSession;
+    const current = roomSession.slug === slug;
+    const room = current ? roomSession.room : null;
+    const gone = current ? roomSession.gone : null;
+    const status = current ? roomSession.status : "connecting";
+    const clockOffset = roomSession.clockOffset;
+    const [settingsOpen, setSettingsOpen] = useState(false);
+
+    // Stays connected after leaving this page; only "Leave" disconnects.
+    useEffect(() => {
+        join(slug);
+    }, [join, slug]);
+
+    function leaveRoom() {
+        leave();
+        router.push("/rooms");
+    }
 
     if (gone || !room) {
         return (
             <div className="mx-auto flex min-h-dvh w-full max-w-7xl flex-col border-x-2 border-ink/10">
-                {header}
+                <AppHeader
+                    status={gone ? undefined : status}
+                    leading={
+                        <>
+                            <Link href="/rooms" className={cn(buttonVariants({ variant: "ghost", size: "lg" }), "h-12 gap-1.5 text-sm")}>
+                                <ArrowLeft /> Rooms
+                            </Link>
+                            <Separator orientation="vertical" />
+                            <span className="truncate font-mono text-xs font-semibold text-ink/60 uppercase">Room / {slug}</span>
+                        </>
+                    }
+                />
                 {gone ? (
                     <GoneScreen reason={gone} />
                 ) : (
@@ -214,68 +158,49 @@ export function RoomClient({ slug }: { slug: string }) {
     }
 
     const viewer = getViewer(room, userId, isAdmin);
-    const subtitle = viewer.isOwner
-        ? "You own this room"
-        : viewer.isHost
-            ? "You're hosting"
-            : viewer.isAdmin
-                ? "Admin view"
-                : room.gameMode === "buzz_in"
-                    ? "Get ready to buzz"
-                    : "Choose where you want to sit";
+    const actionProps = { room, viewer, settingsOpen, onOpenSettings: () => setSettingsOpen(true), onLeave: leaveRoom };
+    // Rendered after either layout so it stays open when the owner switches game modes.
+    const settings = hasRoomSettings(room, viewer) && (
+        <RoomSettings room={room} viewer={viewer} send={send} onDeleteRoom={deleteRoom} open={settingsOpen} onOpenChange={setSettingsOpen} />
+    );
+
+    if (room.gameMode === "buzz_in") {
+        return (
+            <>
+                <BuzzIn
+                    room={room}
+                    viewer={viewer}
+                    clockOffset={clockOffset}
+                    send={send}
+                    status={status}
+                    actions={<RoomActions tone="dark" {...actionProps} />}
+                />
+                {settings}
+            </>
+        );
+    }
 
     return (
-        <div className="mx-auto flex min-h-dvh w-full max-w-7xl flex-col border-x-2 border-ink/10 pb-16">
-            {header}
-
-            <section className="flex flex-wrap items-end justify-between gap-6 border-b-2 border-ink px-4 pt-10 pb-8 sm:px-8">
-                <div className="min-w-0">
-                    <div className="flex flex-wrap items-center gap-2">
-                        <Badge
-                            variant="outline"
-                            className={cn(
-                                "h-6 gap-1.5 border-2 px-2.5 font-mono text-[10px] uppercase",
-                                status === "live" ? "border-pine/30 bg-green-100 text-pine" : "border-destructive/30 bg-destructive/10 text-destructive"
-                            )}
-                        >
-                            {status === "live" ? <Radio /> : <WifiOff />}
-                            {status === "live" ? "Room live" : status === "offline" ? "Reconnecting" : "Joining"}
-                        </Badge>
-                        <Badge variant="outline" className="h-6 gap-1.5 border-2 border-ink/15 bg-white px-2.5 font-mono text-[10px] uppercase">
-                            {room.gameMode === "buzz_in" ? <Zap /> : <Users />}
-                            {room.gameMode === "buzz_in" ? "Buzz In" : "Teams"}
-                        </Badge>
-                    </div>
-                    <h1 className="mt-4 text-5xl leading-[0.95] font-bold tracking-tight break-words sm:text-7xl">{room.title}</h1>
-                    <p className="mt-3 font-mono text-xs text-ink/60">
-                        {room.players.length} connected · {subtitle}
-                    </p>
+        <>
+            <div className="@container flex min-h-dvh flex-col">
+                <RoomTopBar
+                    tone="light"
+                    title={room.title}
+                    status={status}
+                    className="sticky top-0 border-b-2 border-ink bg-white/90 backdrop-blur"
+                    details={
+                        <span className="hidden shrink-0 items-center gap-1.5 rounded-full border-2 border-ink/15 bg-white px-2.5 py-0.5 font-mono text-[10px] font-semibold uppercase @xl:flex">
+                            <Users className="size-3" /> Teams · {room.players.length} here
+                        </span>
+                    }
+                >
+                    <RoomActions tone="light" {...actionProps} />
+                </RoomTopBar>
+                <div className="mx-auto w-full max-w-7xl">
+                    <TeamsBoard room={room} viewer={viewer} send={send} />
                 </div>
-                <div className="flex flex-wrap gap-2">
-                    {room.gameMode === "buzz_in" && (
-                        <a
-                            href={`/rooms/${slug}/preview`}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className={cn(buttonVariants({ size: "lg" }), "h-11 border-2 border-ink px-4 text-sm shadow-[3px_3px_0_var(--coral)]")}
-                        >
-                            <MonitorPlay /> Open preview
-                        </a>
-                    )}
-                    <Button variant="outline" size="lg" className="h-11 border-2 border-ink bg-white px-4 text-sm" onClick={copyInvite}>
-                        {copied ? <Check /> : <Copy />}
-                        {copied ? "Copied" : "Copy invite"}
-                    </Button>
-                </div>
-            </section>
-
-            <OwnerControls room={room} viewer={viewer} send={send} onDeleteRoom={deleteRoom} />
-
-            {room.gameMode === "buzz_in" ? (
-                <BuzzIn room={room} viewer={viewer} clockOffset={clockOffset} send={send} />
-            ) : (
-                <TeamsBoard room={room} viewer={viewer} send={send} />
-            )}
-        </div>
+            </div>
+            {settings}
+        </>
     );
 }

@@ -40,20 +40,21 @@ Sessions are HMAC-signed, `httpOnly` cookies. The browser exchanges the session 
 | Route | Who | What |
 | --- | --- | --- |
 | `/` | Signed-out visitors | Landing page and sign-in. Signed-in users go straight to `/rooms`. |
-| `/rooms` | Signed-in users | All open rooms, room creation, and search. |
-| `/rooms/[slug]` | Signed-in users | The room: teams, Buzz In, and host/owner/admin controls. |
+| `/rooms` | Signed-in users | All open rooms, room creation, and search. If you're in a room, a drawer at the bottom lets you return to it or leave. |
+| `/rooms/[slug]` | Signed-in users | The room. Buzz In rooms are a full-screen stage with small top-right buttons (edit board, game controls, big-screen preview, invite link, **Settings** drawer, leave, account); Teams rooms use the same compact top bar. You stay in the room while browsing `/rooms` until you click **Leave** (or join another room). |
 | `/rooms/[slug]/preview` | Anyone with the link | Read-only Buzz In stage: lobby, board with scores, animated clue/timer/answer reveals, Final Buzz In, and the winner podium. Answers stay hidden until the host reveals them, so it's safe to cast to a TV. |
 
 ## Buzz In
 
 - **Lobby:** Buzz In rooms open in a lobby. Players mark themselves **Ready** while the owner and host build the board. Once every clue on the board is filled in, the owner or host gets a **Start game** button; if some players aren't ready they can still start after confirming.
-- **Board:** the owner and host build the board in the **Clues** panel: 1–10 categories (5 by default) with 5 clues each. Rename a category inline, click any tile to write its clue and answer, or load prefilled content. Use a column's menu to load one prefilled category, or **Use prefilled board** to fill every column with random prefilled categories.
+- **Board:** the owner and host build the board in **Edit board** mode (top-right pencil, or **Fill the board** in the lobby). The stage turns into an editor where every tile shows its points, question, and answer: 1–10 categories (5 by default) with 5 clues each. Rename a category inline, click any tile to write its clue and answer, or load prefilled content. Use a column's menu to load one prefilled category, or **Use prefilled board** to fill every column with random prefilled categories. Edit mode closes on its own when a clue opens or the game moves to a new phase.
 - **Prefilled categories** live in [lib/buzz-in/categories](./lib/buzz-in/categories). To add one, create a file there and list it in `PREFILLED_CATEGORIES` in [lib/buzz-in/index.ts](./lib/buzz-in/index.ts).
 - Players only receive a clue's text once it's picked, and the answer once it's revealed. The owner and host see everything, so neither can buzz; the host runs the game.
 - Players buzz with the button or the <kbd>Space</kbd> key. Player screens use the same animated stage as the preview (board, clue reveals, timer, and live scores).
-- **Game rules** (owner/host): players can either **say** their answer out loud or **type** it after buzzing. Typed answers are shown only to the owner and host, marked as needing judging, correct, or incorrect. Clues can be picked by the **host**, or by **players**: the last player to answer correctly picks the next clue, and the host can always pick instead.
-- **Clue timer** (host tools): toggle it on or off, pick 5–180 seconds, and choose whether running out of time reveals the answer or just locks the buzzers. The clock pauses while a player answers and resumes (minimum 3 seconds) after a wrong answer.
-- **Final Buzz In** (owner/host, on by default): when the last clue is closed (or the host ends the board early), every player wagers up to their current score and types an answer before the timer runs out (60 seconds by default, 15–300). Use a random hard question from a prefilled category that isn't on the board, or write your own. Wagers and answers stay hidden from other players until the host judges them and reveals the results.
+- **Game rules** (owner/host, in **Settings → Rules**): players can either **say** their answer out loud or **type** it after buzzing. Typed answers are shown only to the owner and host, marked as needing judging, correct, or incorrect. Clues can be picked by the **host**, or by **players**: the last player to answer correctly picks the next clue, and the host can always pick instead.
+- **Judging hints** (owner/host): when judging a typed answer or a Final Buzz In answer, a hint says whether it **looks right**, is **close** (your call), or **doesn't match**, e.g. "Elephant" for "African elephant" is close. Choose **Off**, **Strict**, **Balanced** (default), or **Lenient** in **Settings → Rules**. Matching lives in [lib/answer-match.ts](./lib/answer-match.ts); answers like `Paris / Paree` or `Saturn (accept: the ringed planet)` list alternates.
+- **Clue timer** (host, in **Settings → Timers**): toggle it on or off, pick 5–180 seconds, and choose whether running out of time reveals the answer or just locks the buzzers. The clock pauses while a player answers and resumes (minimum 3 seconds) after a wrong answer.
+- **Final Buzz In** (owner/host, in **Settings → Timers**, on by default): when the last clue is closed (or the host ends the board early), every player wagers up to their current score and types an answer before the timer runs out (60 seconds by default, 15–300). Use a random hard question from a prefilled category that isn't on the board, or write your own. Wagers and answers stay hidden from other players until the host judges them and reveals the results.
 - **Winner screen:** after the Final Buzz In (or the last clue, if it's off) everyone sees an animated podium. **Back to lobby** resets scores and clues for another game.
 
 ## Admins
@@ -61,7 +62,7 @@ Sessions are HMAC-signed, `httpOnly` cookies. The browser exchanges the session 
 Admins are Discord accounts listed in `ADMIN_DISCORD_IDS` in [lib/auth/admins.ts](./lib/auth/admins.ts). Admin rights are checked on the party worker. Admins can:
 
 - Delete any room from the room list or from inside the room.
-- Use owner controls in any room (rename, privacy, team size, game mode, choose the host, rename teams, move players).
+- Use the room **Settings** drawer in any room (rename, privacy, team size, game mode, choose the host), plus rename teams and move players.
 - Remove players from a room (they can't rejoin until someone lets removed players back in).
 
 ## Deployment
