@@ -13,6 +13,7 @@ import {
     DropdownMenuLabel,
     DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { useGameAudio } from "@/hooks/use-game-audio";
 import type { ConnectionStatus } from "@/lib/party-client";
 import { getContestants, playerLabel, type GamePhase, type RoomState } from "@/lib/protocol";
 import { BoardEditor } from "./board-editor";
@@ -128,6 +129,7 @@ function GameMenu({ room, viewer, send }: Pick<BuzzInProps, "room" | "viewer" | 
 
 /** The Buzz In room: a full-screen stage with a compact top bar. */
 export function BuzzIn({ room, viewer, clockOffset, send, status, actions }: BuzzInProps) {
+    useGameAudio(room);
     const [editing, setEditing] = useState(false);
     const [seen, setSeen] = useState({ phase: room.phase, clue: room.buzz.activeQuestionId });
     // Drop out of edit mode when a clue opens or the phase changes so the owner/host doesn't miss it.

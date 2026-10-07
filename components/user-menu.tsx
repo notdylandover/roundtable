@@ -1,7 +1,8 @@
 "use client";
 
-import { ChevronDown, LogOut, Pencil, ShieldCheck } from "lucide-react";
+import { ChevronDown, LogOut, Pencil, ShieldCheck, Volume2 } from "lucide-react";
 import { useState, type FormEvent } from "react";
+import { AudioSettingsDialog } from "@/components/audio-settings-dialog";
 import { useSession } from "@/components/session-provider";
 import { UserAvatar } from "@/components/user-avatar";
 import { Badge } from "@/components/ui/badge";
@@ -111,6 +112,7 @@ function RenameDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (op
 export function UserMenu({ compact = false }: { compact?: boolean }) {
     const { session } = useSession();
     const [renameOpen, setRenameOpen] = useState(false);
+    const [audioOpen, setAudioOpen] = useState(false);
     const [signingOut, setSigningOut] = useState(false);
 
     if (!session) return null;
@@ -165,6 +167,9 @@ export function UserMenu({ compact = false }: { compact?: boolean }) {
                         </DropdownMenuLabel>
                     </DropdownMenuGroup>
                     <DropdownMenuSeparator />
+                    <DropdownMenuItem onClick={() => setAudioOpen(true)}>
+                        <Volume2 /> Audio settings
+                    </DropdownMenuItem>
                     {user.provider === "guest" && (
                         <DropdownMenuItem onClick={() => setRenameOpen(true)}>
                             <Pencil /> Change name
@@ -176,6 +181,7 @@ export function UserMenu({ compact = false }: { compact?: boolean }) {
                 </DropdownMenuContent>
             </DropdownMenu>
             {user.provider === "guest" && <RenameDialog open={renameOpen} onOpenChange={setRenameOpen} />}
+            <AudioSettingsDialog open={audioOpen} onOpenChange={setAudioOpen} />
         </>
     );
 }

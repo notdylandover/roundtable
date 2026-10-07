@@ -8,10 +8,12 @@ import { SessionProvider } from "@/components/session-provider";
 import { Toaster } from "@/components/ui/toast";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { getClientSession } from "@/lib/auth/server";
+import { Analytics } from "@vercel/analytics/next";
+import { SpeedInsights } from "@vercel/speed-insights/next"
 
 export const metadata: Metadata = {
     title: "RoundTable",
-    description: "A round table with multiple games.",
+    description: "Pick a table.\nBring your friends.",
 };
 
 export default async function RootLayout({ children }: LayoutProps<"/">) {
@@ -28,6 +30,8 @@ export default async function RootLayout({ children }: LayoutProps<"/">) {
                         <Toaster>{children}</Toaster>
                     </TooltipProvider>
                 </SessionProvider>
+                <Analytics />
+                <SpeedInsights />
             </body>
         </html>
     );
